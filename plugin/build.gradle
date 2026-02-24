@@ -26,11 +26,13 @@ dependencies {
     compileOnly fileTree(dir: "${cameoHome}/lib", include: ['com.nomagic.magicdraw.uml2-*.jar'])
     compileOnly fileTree(dir: "${cameoHome}/lib", include: ['com.nomagic.magicdraw.foundation-*.jar'])
     compileOnly fileTree(dir: "${cameoHome}/lib", include: ['com.nomagic.magicdraw.core.diagram-*.jar'])
+    compileOnly fileTree(dir: "${cameoHome}/lib", include: ['com.nomagic.magicdraw.modeling-*.jar'])
     compileOnly fileTree(dir: "${cameoHome}/lib", include: ['com.dassault_systemes.modeler.foundation-*.jar'])
     compileOnly fileTree(dir: "${cameoHome}/lib", include: ['org.eclipse.emf.ecore-*.jar'])
     compileOnly fileTree(dir: "${cameoHome}/lib", include: ['org.eclipse.emf.common-*.jar'])
     compileOnly fileTree(dir: "${cameoHome}/lib", include: ['javax.jmi-*.jar'])
     compileOnly fileTree(dir: "${cameoHome}/lib", include: ['gson-*.jar'])
+    compileOnly fileTree(dir: "${cameoHome}/lib", include: ['cmof-*.jar'])
 }
 
 tasks.named('compileJava') {

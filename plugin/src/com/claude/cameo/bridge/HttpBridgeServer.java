@@ -1,5 +1,8 @@
 package com.claude.cameo.bridge;
 
+import com.claude.cameo.bridge.handlers.ContainmentTreeHandler;
+import com.claude.cameo.bridge.handlers.ElementQueryHandler;
+import com.claude.cameo.bridge.handlers.ProjectHandler;
 import com.sun.net.httpserver.HttpServer;
 import com.sun.net.httpserver.HttpExchange;
 import com.google.gson.JsonObject;
@@ -23,6 +26,9 @@ public class HttpBridgeServer {
 
     private void registerHandlers() {
         server.createContext("/api/v1/status", this::handleStatus);
+        server.createContext("/api/v1/project", new ProjectHandler());
+        server.createContext("/api/v1/containment-tree", new ContainmentTreeHandler());
+        server.createContext("/api/v1/elements", new ElementQueryHandler());
     }
 
     public void start() {
@@ -46,7 +52,7 @@ public class HttpBridgeServer {
         sendJson(exchange, 200, response);
     }
 
-    static void sendJson(HttpExchange exchange, int status, JsonObject json) throws IOException {
+    public static void sendJson(HttpExchange exchange, int status, JsonObject json) throws IOException {
         byte[] bytes = json.toString().getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
         exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
@@ -56,7 +62,7 @@ public class HttpBridgeServer {
         }
     }
 
-    static void sendError(HttpExchange exchange, int status, String code, String message) throws IOException {
+    public static void sendError(HttpExchange exchange, int status, String code, String message) throws IOException {
         JsonObject error = new JsonObject();
         error.addProperty("error", true);
         error.addProperty("code", code);
