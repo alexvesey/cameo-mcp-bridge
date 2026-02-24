@@ -254,6 +254,46 @@ async def auto_layout(diagram_id: str) -> dict[str, Any]:
     """Apply automatic layout to a diagram."""
     return await _request("POST", f"/diagrams/{diagram_id}/layout")
 
+# -- Diagram Shape Management -------------------------------------------------
+
+
+async def list_diagram_shapes(diagram_id: str) -> dict[str, Any]:
+    """List all shapes and paths on a diagram with bounds and element info."""
+    return await _request("GET", f"/diagrams/{diagram_id}/shapes")
+
+
+async def move_shapes(
+    diagram_id: str,
+    shapes: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Move/resize shapes on a diagram."""
+    return await _request("PUT", f"/diagrams/{diagram_id}/shapes", json_body={"shapes": shapes})
+
+
+async def delete_shapes(
+    diagram_id: str,
+    presentation_ids: list[str],
+) -> dict[str, Any]:
+    """Delete presentation elements from a diagram."""
+    return await _request("DELETE", f"/diagrams/{diagram_id}/shapes", json_body={"presentationIds": presentation_ids})
+
+
+async def add_diagram_paths(
+    diagram_id: str,
+    paths: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Add relationship paths to a diagram."""
+    return await _request("POST", f"/diagrams/{diagram_id}/paths", json_body={"paths": paths})
+
+
+async def set_shape_properties(
+    diagram_id: str,
+    presentation_id: str,
+    properties: dict[str, Any],
+) -> dict[str, Any]:
+    """Set display properties on a diagram shape."""
+    return await _request("PUT", f"/diagrams/{diagram_id}/shapes/{presentation_id}/properties", json_body={"properties": properties})
+
 # -- Containment Tree ---------------------------------------------------------
 
 
@@ -291,6 +331,13 @@ async def set_specification(
         body["constraints"] = constraints
     return await _request("PUT", f"/elements/{element_id}/specification", json_body=body)
 
+
+# -- Session Management -------------------------------------------------------
+
+
+async def reset_session() -> dict[str, Any]:
+    """Force-close any stuck model session."""
+    return await _request("POST", "/session/reset")
 
 # -- Macros -------------------------------------------------------------------
 

@@ -1,9 +1,9 @@
 package com.claude.cameo.bridge.handlers;
 
 import com.claude.cameo.bridge.HttpBridgeServer;
-import com.claude.cameo.bridge.util.EdtDispatcher;
 import com.claude.cameo.bridge.util.JsonHelper;
 import com.nomagic.magicdraw.core.Application;
+import com.nomagic.magicdraw.core.Project;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.google.gson.JsonObject;
@@ -13,10 +13,13 @@ import javax.script.ScriptEngineFactory;
 import javax.script.ScriptEngineManager;
 import javax.script.ScriptContext;
 import javax.script.SimpleScriptContext;
+import javax.swing.SwingUtilities;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
@@ -160,7 +163,20 @@ public class MacroHandler implements HttpHandler {
         final ScriptEngine finalEngine = engine;
         final String finalEngineUsed = engineUsed;
 
-        JsonObject result = EdtDispatcher.write("MCP Bridge: Execute Macro", project -> {
+        // Get project outside EDT — Application.getInstance() is thread-safe
+        Project project = Application.getInstance().getProject();
+        if (project == null) {
+            HttpBridgeServer.sendError(exchange, 400, "NO_PROJECT",
+                    "No project is open in Cameo");
+            return;
+        }
+
+        // Dispatch to EDT directly — NO SessionManager session.
+        // Scripts are responsible for their own session management
+        // (createSession/closeSession) when they need to modify the model.
+        CompletableFuture<JsonObject> future = new CompletableFuture<>();
+
+        SwingUtilities.invokeLater(() -> {
             // Set up output capture
             StringWriter outputWriter = new StringWriter();
             StringWriter errorWriter = new StringWriter();
@@ -177,6 +193,11 @@ public class MacroHandler implements HttpHandler {
             context.setAttribute("application", Application.getInstance(),
                     ScriptContext.ENGINE_SCOPE);
             context.setAttribute("primaryModel", project.getPrimaryModel(),
+                    ScriptContext.ENGINE_SCOPE);
+
+            // Inject ElementsFactory for convenience
+            context.setAttribute("ef",
+                    project.getElementsFactory(),
                     ScriptContext.ENGINE_SCOPE);
 
             finalEngine.setContext(context);
@@ -205,9 +226,11 @@ public class MacroHandler implements HttpHandler {
             }
 
             response.addProperty("engine", finalEngineUsed);
-            return response;
+            future.complete(response);
         });
 
+        // 60-second timeout — macros can be slow
+        JsonObject result = future.get(60, TimeUnit.SECONDS);
         HttpBridgeServer.sendJson(exchange, 200, result);
     }
 }

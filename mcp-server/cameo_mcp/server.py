@@ -55,6 +55,32 @@ async def cameo_save_project() -> str:
     result = await client.save_project()
     return json.dumps(result, indent=2)
 
+
+# -- Session Management -------------------------------------------------------
+
+
+@mcp.tool()
+async def cameo_reset_session() -> str:
+    """Force-close any stuck model editing session in CATIA Magic.
+
+    Use this tool when you encounter errors like:
+    - "Session is already created" — another edit session was left open
+    - Macro execution errors that leave the model in a locked state
+    - Any operation that times out or fails mid-transaction
+
+    This is a recovery tool. It discards any uncommitted changes from the
+    stuck session and returns the model to a clean, unlocked state so that
+    subsequent operations can proceed normally.
+
+    You do NOT need to call this before normal operations — only when
+    something has gone wrong and the bridge is reporting session conflicts.
+
+    Returns:
+        JSON confirmation that the session was reset.
+    """
+    result = await client.reset_session()
+    return json.dumps(result, indent=2)
+
 # -- Elements -----------------------------------------------------------------
 
 
@@ -449,6 +475,209 @@ async def cameo_auto_layout(diagram_id: str) -> str:
         JSON confirmation of the layout operation.
     """
     result = await client.auto_layout(diagram_id)
+    return json.dumps(result, indent=2)
+
+
+# -- Diagram Shape Management -------------------------------------------------
+
+
+@mcp.tool()
+async def cameo_list_diagram_shapes(diagram_id: str) -> str:
+    """List all shapes and relationship paths currently on a diagram.
+
+    Returns every presentation element (shape, path, label) on the diagram
+    canvas, including each element's presentationId, bounding box (x, y,
+    width, height), and the underlying model element reference.
+
+    You MUST call this before using cameo_move_shapes, cameo_delete_shapes,
+    cameo_add_diagram_paths, or cameo_set_shape_properties, because those
+    tools require the presentationId values that this tool returns.
+
+    The presentationId is NOT the same as the model element ID — it
+    identifies the visual representation of an element on a specific
+    diagram. The same model element can appear on multiple diagrams with
+    different presentationIds.
+
+    Args:
+        diagram_id: The unique ID of the diagram to inspect.
+
+    Returns:
+        JSON with arrays of shapes and paths, each containing
+        presentationId, bounds (x, y, width, height), and element
+        reference info (elementId, name, type).
+    """
+    result = await client.list_diagram_shapes(diagram_id)
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+async def cameo_move_shapes(
+    diagram_id: str,
+    shapes: list[dict],
+) -> str:
+    """Move and/or resize shapes on a diagram canvas.
+
+    Repositions one or more shapes to new coordinates and/or dimensions.
+    The coordinate system uses pixels measured from the top-left corner
+    of the diagram canvas: x increases rightward, y increases downward.
+
+    Call cameo_list_diagram_shapes first to get the current presentationId
+    and bounds for each shape you want to move.
+
+    Args:
+        diagram_id: The unique ID of the diagram containing the shapes.
+        shapes: List of shape position updates. Each dict must contain:
+                - presentationId (str): The presentation element ID from
+                  cameo_list_diagram_shapes.
+                - x (int): New horizontal position in pixels from the left
+                  edge of the diagram canvas.
+                - y (int): New vertical position in pixels from the top
+                  edge of the diagram canvas.
+                - width (int): New width in pixels. Use the current value
+                  from list_diagram_shapes to keep the size unchanged.
+                - height (int): New height in pixels. Use the current value
+                  from list_diagram_shapes to keep the size unchanged.
+
+                Example:
+                [{"presentationId": "abc-123", "x": 200, "y": 50,
+                  "width": 150, "height": 80}]
+
+    Returns:
+        JSON confirmation with the updated shape positions.
+    """
+    result = await client.move_shapes(
+        diagram_id=diagram_id,
+        shapes=shapes,
+    )
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+async def cameo_delete_shapes(
+    diagram_id: str,
+    presentation_ids: list[str],
+) -> str:
+    """Delete presentation elements (shapes/paths) from a diagram canvas.
+
+    This removes the visual representation of elements from the diagram
+    ONLY — it does NOT delete the underlying model elements. The model
+    elements remain in the containment tree and can be re-added to this
+    or other diagrams later.
+
+    Use cameo_delete_element instead if you want to remove the element
+    from the model entirely.
+
+    Call cameo_list_diagram_shapes first to get the presentationId values
+    for the shapes you want to remove.
+
+    Args:
+        diagram_id: The unique ID of the diagram to modify.
+        presentation_ids: List of presentationId strings identifying the
+                          shapes or paths to remove from the diagram.
+                          These IDs come from cameo_list_diagram_shapes.
+
+    Returns:
+        JSON confirmation with count of deleted presentation elements.
+    """
+    result = await client.delete_shapes(
+        diagram_id=diagram_id,
+        presentation_ids=presentation_ids,
+    )
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+async def cameo_add_diagram_paths(
+    diagram_id: str,
+    paths: list[dict],
+) -> str:
+    """Add relationship lines (paths) to a diagram.
+
+    Draws visual paths on the diagram for existing model relationships.
+    The relationship must already exist in the model (created via
+    cameo_create_relationship), and both the source and target elements
+    must already be present on the diagram as shapes.
+
+    You MUST call cameo_list_diagram_shapes first to get the
+    presentationId of the source and target shapes (NOT their model
+    element IDs). The path connects two shapes that are already on the
+    diagram canvas.
+
+    Args:
+        diagram_id: The unique ID of the diagram to add paths to.
+        paths: List of path definitions. Each dict must contain:
+               - relationshipId (str): The model element ID of the
+                 relationship (from cameo_create_relationship or
+                 cameo_get_relationships).
+               - sourceShapeId (str): The presentationId of the source
+                 shape on this diagram (from cameo_list_diagram_shapes).
+               - targetShapeId (str): The presentationId of the target
+                 shape on this diagram (from cameo_list_diagram_shapes).
+
+               Example:
+               [{"relationshipId": "rel-456",
+                 "sourceShapeId": "shape-abc",
+                 "targetShapeId": "shape-def"}]
+
+    Returns:
+        JSON confirmation with the created path presentation elements.
+    """
+    result = await client.add_diagram_paths(
+        diagram_id=diagram_id,
+        paths=paths,
+    )
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+async def cameo_set_shape_properties(
+    diagram_id: str,
+    presentation_id: str,
+    properties: dict,
+) -> str:
+    """Set display properties on a specific diagram shape.
+
+    Controls how a shape is visually rendered on the diagram — what
+    compartments are shown, what labels are visible, etc. These are
+    presentation-level properties (NOT model properties).
+
+    Call cameo_list_diagram_shapes first to get the presentationId of
+    the shape you want to modify.
+
+    Common properties and their expected types:
+    - "Show Constraints" (bool): Show/hide constraint compartment.
+    - "Show Tagged Values" (bool): Show/hide tagged values compartment.
+    - "Show Properties" (bool): Show/hide properties compartment.
+    - "Show Operations" (bool): Show/hide operations compartment.
+    - "Show Ports" (bool): Show/hide port shapes on the border.
+    - "Show Full Path" (bool): Show fully-qualified name.
+    - "Show Name" (bool): Show/hide the element name label.
+    - "Show Type" (bool): Show/hide element type.
+    - "Show Stereotype" (bool): Show/hide stereotype label.
+    - "Suppress Attributes" (bool): Hide the attributes compartment.
+    - "Suppress Operations" (bool): Hide the operations compartment.
+    - "Autosize" (bool): Auto-fit shape to content.
+    - "Fill Color" (str): Background color (e.g. "#RRGGBB").
+    - "Font Color" (str): Text color (e.g. "#RRGGBB").
+    - "Line Color" (str): Border/line color (e.g. "#RRGGBB").
+
+    Args:
+        diagram_id: The unique ID of the diagram containing the shape.
+        presentation_id: The presentationId of the shape to modify
+                         (from cameo_list_diagram_shapes).
+        properties: Dictionary of property-name to value mappings.
+                    Example: {"Show Constraints": true,
+                              "Show Tagged Values": true,
+                              "Fill Color": "#E0F0FF"}.
+
+    Returns:
+        JSON confirmation with count of properties set.
+    """
+    result = await client.set_shape_properties(
+        diagram_id=diagram_id,
+        presentation_id=presentation_id,
+        properties=properties,
+    )
     return json.dumps(result, indent=2)
 
 

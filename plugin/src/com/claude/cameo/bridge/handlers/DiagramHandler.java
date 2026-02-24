@@ -11,6 +11,9 @@ import com.nomagic.magicdraw.openapi.uml.PresentationElementsManager;
 import com.nomagic.magicdraw.uml.symbols.DiagramPresentationElement;
 import com.nomagic.magicdraw.uml.symbols.PresentationElement;
 import com.nomagic.magicdraw.uml.symbols.shapes.ShapeElement;
+import com.nomagic.magicdraw.uml.symbols.paths.PathElement;
+import com.nomagic.magicdraw.properties.PropertyManager;
+import com.nomagic.magicdraw.properties.Property;
 import com.nomagic.uml2.ext.magicdraw.classes.mdkernel.Diagram;
 import com.nomagic.uml2.ext.magicdraw.classes.mdkernel.Element;
 import com.nomagic.uml2.ext.magicdraw.classes.mdkernel.NamedElement;
@@ -18,6 +21,7 @@ import com.nomagic.uml2.ext.magicdraw.classes.mdkernel.Namespace;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
 import javax.imageio.ImageIO;
@@ -49,47 +53,64 @@ public class DiagramHandler implements HttpHandler {
             if ("OPTIONS".equals(method)) {
                 exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
                 exchange.getResponseHeaders().set("Access-Control-Allow-Methods",
-                        "GET, POST, OPTIONS");
+                        "GET, POST, PUT, DELETE, OPTIONS");
                 exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type");
                 exchange.sendResponseHeaders(204, -1);
                 return;
             }
 
+            String diagramId = JsonHelper.extractPathParam(exchange, PREFIX);
+            String subPath = JsonHelper.extractSubPath(exchange, PREFIX);
+
             if ("GET".equals(method)) {
                 if (path.equals("/api/v1/diagrams")) {
                     handleListDiagrams(exchange);
+                } else if (diagramId != null && "image".equals(subPath)) {
+                    handleExportImage(exchange, diagramId);
+                } else if (diagramId != null && "shapes".equals(subPath)) {
+                    handleListShapes(exchange, diagramId);
+                } else if (diagramId != null && subPath == null) {
+                    handleGetDiagram(exchange, diagramId);
                 } else {
-                    String diagramId = JsonHelper.extractPathParam(exchange, PREFIX);
-                    String subPath = JsonHelper.extractSubPath(exchange, PREFIX);
-
-                    if (diagramId != null && "image".equals(subPath)) {
-                        handleExportImage(exchange, diagramId);
-                    } else if (diagramId != null && subPath == null) {
-                        handleGetDiagram(exchange, diagramId);
-                    } else {
-                        HttpBridgeServer.sendError(exchange, 404, "NOT_FOUND",
-                                "Unknown endpoint: " + path);
-                    }
+                    HttpBridgeServer.sendError(exchange, 404, "NOT_FOUND",
+                            "Unknown endpoint: " + path);
                 }
             } else if ("POST".equals(method)) {
                 if (path.equals("/api/v1/diagrams")) {
                     handleCreateDiagram(exchange);
+                } else if (diagramId != null && "elements".equals(subPath)) {
+                    handleAddElement(exchange, diagramId);
+                } else if (diagramId != null && "layout".equals(subPath)) {
+                    handleLayout(exchange, diagramId);
+                } else if (diagramId != null && "paths".equals(subPath)) {
+                    handleAddPaths(exchange, diagramId);
                 } else {
-                    String diagramId = JsonHelper.extractPathParam(exchange, PREFIX);
-                    String subPath = JsonHelper.extractSubPath(exchange, PREFIX);
-
-                    if (diagramId != null && "elements".equals(subPath)) {
-                        handleAddElement(exchange, diagramId);
-                    } else if (diagramId != null && "layout".equals(subPath)) {
-                        handleLayout(exchange, diagramId);
-                    } else {
-                        HttpBridgeServer.sendError(exchange, 404, "NOT_FOUND",
-                                "Unknown endpoint: " + path);
-                    }
+                    HttpBridgeServer.sendError(exchange, 404, "NOT_FOUND",
+                            "Unknown endpoint: " + path);
+                }
+            } else if ("PUT".equals(method)) {
+                if (diagramId != null && "shapes".equals(subPath)) {
+                    handleMoveResizeShapes(exchange, diagramId);
+                } else if (diagramId != null && subPath != null
+                        && subPath.startsWith("shapes/") && subPath.endsWith("/properties")) {
+                    // Extract peId from subPath: shapes/{peId}/properties
+                    String peId = subPath.substring("shapes/".length(),
+                            subPath.length() - "/properties".length());
+                    handleSetShapeProperties(exchange, diagramId, peId);
+                } else {
+                    HttpBridgeServer.sendError(exchange, 404, "NOT_FOUND",
+                            "Unknown endpoint: " + path);
+                }
+            } else if ("DELETE".equals(method)) {
+                if (diagramId != null && "shapes".equals(subPath)) {
+                    handleDeleteShapes(exchange, diagramId);
+                } else {
+                    HttpBridgeServer.sendError(exchange, 404, "NOT_FOUND",
+                            "Unknown endpoint: " + path);
                 }
             } else {
                 HttpBridgeServer.sendError(exchange, 405, "METHOD_NOT_ALLOWED",
-                        "Only GET and POST are supported");
+                        "Method not supported: " + method);
             }
         } catch (IllegalArgumentException e) {
             HttpBridgeServer.sendError(exchange, 404, "NOT_FOUND", e.getMessage());
@@ -366,6 +387,332 @@ public class DiagramHandler implements HttpHandler {
 
         HttpBridgeServer.sendJson(exchange, 200, result);
     }
+
+    // ── Shape Management Endpoints ──────────────────────────────────────────
+
+    private void handleListShapes(HttpExchange exchange, String diagramId) throws Exception {
+        JsonObject result = EdtDispatcher.read(project -> {
+            DiagramPresentationElement dpe = findDiagramById(project, diagramId);
+            dpe.ensureLoaded();
+
+            JsonArray shapesArray = new JsonArray();
+            List<PresentationElement> presentationElements = dpe.getPresentationElements();
+            if (presentationElements != null) {
+                for (PresentationElement pe : presentationElements) {
+                    try {
+                        JsonObject shapeJson = new JsonObject();
+                        shapeJson.addProperty("presentationId", pe.getID());
+                        shapeJson.addProperty("shapeType", pe.getClass().getSimpleName());
+
+                        Element modelElement = pe.getElement();
+                        if (modelElement != null) {
+                            shapeJson.addProperty("elementId", modelElement.getID());
+                            if (modelElement instanceof NamedElement) {
+                                shapeJson.addProperty("elementName",
+                                        ((NamedElement) modelElement).getName());
+                            }
+                            shapeJson.addProperty("elementType",
+                                    modelElement.getHumanType());
+                        }
+
+                        try {
+                            Rectangle bounds = pe.getBounds();
+                            if (bounds != null) {
+                                JsonObject boundsJson = new JsonObject();
+                                boundsJson.addProperty("x", bounds.x);
+                                boundsJson.addProperty("y", bounds.y);
+                                boundsJson.addProperty("width", bounds.width);
+                                boundsJson.addProperty("height", bounds.height);
+                                shapeJson.add("bounds", boundsJson);
+                            }
+                        } catch (Exception e) {
+                            // Some presentation elements do not have rectangular bounds
+                        }
+
+                        shapesArray.add(shapeJson);
+                    } catch (Exception e) {
+                        LOG.log(Level.FINE, "Error reading presentation element", e);
+                    }
+                }
+            }
+
+            JsonObject response = new JsonObject();
+            response.addProperty("diagramId", diagramId);
+            response.addProperty("count", shapesArray.size());
+            response.add("shapes", shapesArray);
+            return response;
+        });
+
+        HttpBridgeServer.sendJson(exchange, 200, result);
+    }
+
+    private void handleMoveResizeShapes(HttpExchange exchange, String diagramId) throws Exception {
+        JsonObject body = JsonHelper.parseBody(exchange);
+
+        if (!body.has("shapes") || !body.get("shapes").isJsonArray()) {
+            HttpBridgeServer.sendError(exchange, 400, "MISSING_PARAM",
+                    "Request body must include a 'shapes' array");
+            return;
+        }
+
+        JsonArray shapesInput = body.getAsJsonArray("shapes");
+
+        JsonObject result = EdtDispatcher.write("MCP Bridge: Move/Resize Shapes", project -> {
+            DiagramPresentationElement dpe = findDiagramById(project, diagramId);
+            dpe.ensureLoaded();
+
+            List<PresentationElement> allPEs = dpe.getPresentationElements();
+            PresentationElementsManager pem = PresentationElementsManager.getInstance();
+            JsonArray results = new JsonArray();
+
+            for (JsonElement item : shapesInput) {
+                JsonObject shapeReq = item.getAsJsonObject();
+                String presentationId = shapeReq.get("presentationId").getAsString();
+                int x = shapeReq.get("x").getAsInt();
+                int y = shapeReq.get("y").getAsInt();
+                int width = shapeReq.get("width").getAsInt();
+                int height = shapeReq.get("height").getAsInt();
+
+                PresentationElement target = findPresentationElement(allPEs, presentationId);
+                if (target == null) {
+                    JsonObject err = new JsonObject();
+                    err.addProperty("presentationId", presentationId);
+                    err.addProperty("error", "Presentation element not found");
+                    results.add(err);
+                    continue;
+                }
+
+                if (!(target instanceof ShapeElement)) {
+                    JsonObject err = new JsonObject();
+                    err.addProperty("presentationId", presentationId);
+                    err.addProperty("error", "Element is not a shape (cannot reshape paths)");
+                    results.add(err);
+                    continue;
+                }
+
+                pem.reshapeShapeElement((ShapeElement) target,
+                        new Rectangle(x, y, width, height));
+
+                JsonObject ok = new JsonObject();
+                ok.addProperty("presentationId", presentationId);
+                ok.addProperty("reshaped", true);
+                results.add(ok);
+            }
+
+            JsonObject response = new JsonObject();
+            response.addProperty("diagramId", diagramId);
+            response.add("results", results);
+            return response;
+        });
+
+        HttpBridgeServer.sendJson(exchange, 200, result);
+    }
+
+    private void handleDeleteShapes(HttpExchange exchange, String diagramId) throws Exception {
+        JsonObject body = JsonHelper.parseBody(exchange);
+
+        if (!body.has("presentationIds") || !body.get("presentationIds").isJsonArray()) {
+            HttpBridgeServer.sendError(exchange, 400, "MISSING_PARAM",
+                    "Request body must include a 'presentationIds' array");
+            return;
+        }
+
+        JsonArray idsInput = body.getAsJsonArray("presentationIds");
+
+        JsonObject result = EdtDispatcher.write("MCP Bridge: Delete Presentation Elements", project -> {
+            DiagramPresentationElement dpe = findDiagramById(project, diagramId);
+            dpe.ensureLoaded();
+
+            List<PresentationElement> allPEs = dpe.getPresentationElements();
+            PresentationElementsManager pem = PresentationElementsManager.getInstance();
+            JsonArray results = new JsonArray();
+
+            for (JsonElement item : idsInput) {
+                String peId = item.getAsString();
+                PresentationElement target = findPresentationElement(allPEs, peId);
+
+                JsonObject entry = new JsonObject();
+                entry.addProperty("presentationId", peId);
+
+                if (target == null) {
+                    entry.addProperty("error", "Presentation element not found");
+                } else {
+                    pem.deletePresentationElement(target);
+                    entry.addProperty("deleted", true);
+                }
+                results.add(entry);
+            }
+
+            JsonObject response = new JsonObject();
+            response.addProperty("diagramId", diagramId);
+            response.add("results", results);
+            return response;
+        });
+
+        HttpBridgeServer.sendJson(exchange, 200, result);
+    }
+
+    private void handleAddPaths(HttpExchange exchange, String diagramId) throws Exception {
+        JsonObject body = JsonHelper.parseBody(exchange);
+
+        if (!body.has("paths") || !body.get("paths").isJsonArray()) {
+            HttpBridgeServer.sendError(exchange, 400, "MISSING_PARAM",
+                    "Request body must include a 'paths' array");
+            return;
+        }
+
+        JsonArray pathsInput = body.getAsJsonArray("paths");
+
+        JsonObject result = EdtDispatcher.write("MCP Bridge: Add Relationship Paths", project -> {
+            DiagramPresentationElement dpe = findDiagramById(project, diagramId);
+            dpe.ensureLoaded();
+
+            List<PresentationElement> allPEs = dpe.getPresentationElements();
+            PresentationElementsManager pem = PresentationElementsManager.getInstance();
+            JsonArray results = new JsonArray();
+
+            for (JsonElement item : pathsInput) {
+                JsonObject pathReq = item.getAsJsonObject();
+                String relationshipId = pathReq.get("relationshipId").getAsString();
+                String sourceShapeId = pathReq.get("sourceShapeId").getAsString();
+                String targetShapeId = pathReq.get("targetShapeId").getAsString();
+
+                JsonObject entry = new JsonObject();
+                entry.addProperty("relationshipId", relationshipId);
+
+                Element relationship = (Element) project.getElementByID(relationshipId);
+                if (relationship == null) {
+                    entry.addProperty("error",
+                            "Relationship model element not found: " + relationshipId);
+                    results.add(entry);
+                    continue;
+                }
+
+                PresentationElement sourcePE = findPresentationElement(allPEs, sourceShapeId);
+                if (sourcePE == null) {
+                    entry.addProperty("error",
+                            "Source presentation element not found: " + sourceShapeId);
+                    results.add(entry);
+                    continue;
+                }
+
+                PresentationElement targetPE = findPresentationElement(allPEs, targetShapeId);
+                if (targetPE == null) {
+                    entry.addProperty("error",
+                            "Target presentation element not found: " + targetShapeId);
+                    results.add(entry);
+                    continue;
+                }
+
+                PathElement pathElement = pem.createPathElement(relationship, sourcePE, targetPE);
+                if (pathElement != null) {
+                    entry.addProperty("presentationId", pathElement.getID());
+                    entry.addProperty("created", true);
+                } else {
+                    entry.addProperty("error", "Failed to create path element");
+                }
+                results.add(entry);
+            }
+
+            JsonObject response = new JsonObject();
+            response.addProperty("diagramId", diagramId);
+            response.add("results", results);
+            return response;
+        });
+
+        HttpBridgeServer.sendJson(exchange, 200, result);
+    }
+
+    private void handleSetShapeProperties(HttpExchange exchange, String diagramId, String peId)
+            throws Exception {
+        JsonObject body = JsonHelper.parseBody(exchange);
+
+        if (!body.has("properties") || !body.get("properties").isJsonObject()) {
+            HttpBridgeServer.sendError(exchange, 400, "MISSING_PARAM",
+                    "Request body must include a 'properties' object");
+            return;
+        }
+
+        JsonObject propsInput = body.getAsJsonObject("properties");
+
+        JsonObject result = EdtDispatcher.write("MCP Bridge: Set Shape Properties", project -> {
+            DiagramPresentationElement dpe = findDiagramById(project, diagramId);
+            dpe.ensureLoaded();
+
+            List<PresentationElement> allPEs = dpe.getPresentationElements();
+            PresentationElement target = findPresentationElement(allPEs, peId);
+            if (target == null) {
+                throw new IllegalArgumentException(
+                        "Presentation element not found: " + peId);
+            }
+
+            // MUST clone the PropertyManager -- Cameo rejects reuse of the old one
+            PropertyManager pm = target.getPropertyManager().clone();
+            @SuppressWarnings("unchecked")
+            List<Property> properties = pm.getProperties();
+            JsonArray updated = new JsonArray();
+
+            for (var propEntry : propsInput.entrySet()) {
+                String propName = propEntry.getKey();
+                boolean found = false;
+                for (Property p : properties) {
+                    if (propName.equals(p.getName())) {
+                        JsonElement val = propEntry.getValue();
+                        if (val.isJsonPrimitive()) {
+                            if (val.getAsJsonPrimitive().isBoolean()) {
+                                p.setValue(val.getAsBoolean());
+                            } else if (val.getAsJsonPrimitive().isNumber()) {
+                                p.setValue(val.getAsInt());
+                            } else {
+                                p.setValue(val.getAsString());
+                            }
+                        } else {
+                            p.setValue(val.getAsString());
+                        }
+                        JsonObject u = new JsonObject();
+                        u.addProperty("name", propName);
+                        u.addProperty("set", true);
+                        updated.add(u);
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    JsonObject u = new JsonObject();
+                    u.addProperty("name", propName);
+                    u.addProperty("error", "Property not found on this shape");
+                    updated.add(u);
+                }
+            }
+
+            PresentationElementsManager pem = PresentationElementsManager.getInstance();
+            pem.setPresentationElementProperties(target, pm);
+
+            JsonObject response = new JsonObject();
+            response.addProperty("diagramId", diagramId);
+            response.addProperty("presentationId", peId);
+            response.add("properties", updated);
+            return response;
+        });
+
+        HttpBridgeServer.sendJson(exchange, 200, result);
+    }
+
+    /**
+     * Find a PresentationElement by its ID within a list.
+     */
+    private PresentationElement findPresentationElement(
+            List<PresentationElement> elements, String peId) {
+        if (elements == null || peId == null) return null;
+        for (PresentationElement pe : elements) {
+            if (peId.equals(pe.getID())) {
+                return pe;
+            }
+        }
+        return null;
+    }
+
+    // ── Utility Methods ─────────────────────────────────────────────────────
 
     private DiagramPresentationElement findDiagramById(Project project, String diagramId) {
         Object baseElement = project.getElementByID(diagramId);

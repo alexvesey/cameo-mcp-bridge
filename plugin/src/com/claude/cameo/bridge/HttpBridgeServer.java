@@ -8,6 +8,9 @@ import com.claude.cameo.bridge.handlers.MacroHandler;
 import com.claude.cameo.bridge.handlers.ProjectHandler;
 import com.claude.cameo.bridge.handlers.RelationshipHandler;
 import com.claude.cameo.bridge.handlers.SpecificationHandler;
+import com.nomagic.magicdraw.core.Application;
+import com.nomagic.magicdraw.core.Project;
+import com.nomagic.magicdraw.openapi.uml.SessionManager;
 import com.sun.net.httpserver.HttpServer;
 import com.sun.net.httpserver.HttpExchange;
 import com.google.gson.JsonObject;
@@ -16,6 +19,7 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.Executors;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 public class HttpBridgeServer {
@@ -53,6 +57,7 @@ public class HttpBridgeServer {
         server.createContext("/api/v1/relationships", new RelationshipHandler());
         server.createContext("/api/v1/diagrams", new DiagramHandler());
         server.createContext("/api/v1/macros", new MacroHandler());
+        server.createContext("/api/v1/session/reset", this::handleSessionReset);
     }
 
     public void start() {
@@ -73,6 +78,58 @@ public class HttpBridgeServer {
         response.addProperty("plugin", "CameoMCPBridge");
         response.addProperty("version", "1.0.0");
         response.addProperty("port", server.getAddress().getPort());
+        sendJson(exchange, 200, response);
+    }
+
+    /**
+     * POST /api/v1/session/reset - Force-close any stuck SessionManager session.
+     *
+     * When a macro crashes mid-session, all subsequent API calls that create
+     * sessions will fail with "Session is already created". This endpoint
+     * cancels (or closes) the dangling session so work can continue without
+     * restarting Cameo.
+     */
+    private void handleSessionReset(HttpExchange exchange) throws IOException {
+        if (!"POST".equals(exchange.getRequestMethod())) {
+            sendError(exchange, 405, "METHOD_NOT_ALLOWED", "Only POST is supported");
+            return;
+        }
+
+        Project project = Application.getInstance().getProject();
+        if (project == null) {
+            sendError(exchange, 400, "NO_PROJECT", "No project is open in Cameo");
+            return;
+        }
+
+        SessionManager sm = SessionManager.getInstance();
+        JsonObject response = new JsonObject();
+
+        // Check whether a session is currently active
+        if (!sm.isSessionCreated(project)) {
+            response.addProperty("reset", false);
+            response.addProperty("message", "No active session");
+            sendJson(exchange, 200, response);
+            return;
+        }
+
+        // Try cancel first (rolls back partial changes), fall back to close
+        try {
+            sm.cancelSession(project);
+            response.addProperty("reset", true);
+        } catch (Exception cancelEx) {
+            LOG.log(Level.WARNING, "cancelSession failed, trying closeSession", cancelEx);
+            try {
+                sm.closeSession(project);
+                response.addProperty("reset", true);
+            } catch (Exception closeEx) {
+                LOG.log(Level.SEVERE, "closeSession also failed", closeEx);
+                sendError(exchange, 500, "SESSION_RESET_FAILED",
+                        "cancelSession failed: " + cancelEx.getMessage()
+                                + "; closeSession failed: " + closeEx.getMessage());
+                return;
+            }
+        }
+
         sendJson(exchange, 200, response);
     }
 

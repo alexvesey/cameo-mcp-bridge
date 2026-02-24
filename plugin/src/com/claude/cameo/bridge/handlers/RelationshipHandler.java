@@ -207,25 +207,22 @@ public class RelationshipHandler implements HttpHandler {
         }
         Association assoc = ef.createAssociationInstance();
 
-        Property sourceEnd = ef.createPropertyInstance();
+        // The factory pre-creates two owned ends - use them directly
+        Property sourceEnd = (Property) assoc.getOwnedEnd().get(0);
         sourceEnd.setType((Type) source);
-        Property targetEnd = ef.createPropertyInstance();
+        Property targetEnd = (Property) assoc.getOwnedEnd().get(1);
         targetEnd.setType((Type) target);
 
         if (composition) {
             sourceEnd.setAggregation(AggregationKindEnum.COMPOSITE);
         }
 
-        assoc.getMemberEnd().add(sourceEnd);
-        assoc.getMemberEnd().add(targetEnd);
-        assoc.getOwnedEnd().add(sourceEnd);
-        assoc.getOwnedEnd().add(targetEnd);
-
-        // For directed association, navigate from source to target
+        // For directed association, make target end navigable
         if (directed) {
             targetEnd.setAssociation(assoc);
         }
 
+        // Set owner to source's package so the association persists
         Element owner = source.getOwner();
         if (owner != null) {
             ModelElementsManager.getInstance().addElement(assoc, owner);
@@ -300,7 +297,8 @@ public class RelationshipHandler implements HttpHandler {
         if (stereo != null) {
             StereotypesHelper.addStereotype(abstraction, stereo);
         } else {
-            LOG.warning("SysML stereotype not found: " + stereotypeName);
+            throw new IllegalStateException("SysML stereotype not found: " + stereotypeName
+                    + ". Ensure the SysML profile is applied to the project.");
         }
 
         Element owner = source.getOwner();
