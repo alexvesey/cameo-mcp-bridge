@@ -1,8 +1,10 @@
 package com.claude.cameo.bridge;
 
 import com.claude.cameo.bridge.handlers.ContainmentTreeHandler;
+import com.claude.cameo.bridge.handlers.DiagramHandler;
 import com.claude.cameo.bridge.handlers.ElementMutationHandler;
 import com.claude.cameo.bridge.handlers.ElementQueryHandler;
+import com.claude.cameo.bridge.handlers.MacroHandler;
 import com.claude.cameo.bridge.handlers.ProjectHandler;
 import com.claude.cameo.bridge.handlers.RelationshipHandler;
 import com.sun.net.httpserver.HttpServer;
@@ -43,6 +45,8 @@ public class HttpBridgeServer {
         });
 
         server.createContext("/api/v1/relationships", new RelationshipHandler());
+        server.createContext("/api/v1/diagrams", new DiagramHandler());
+        server.createContext("/api/v1/macros", new MacroHandler());
     }
 
     public void start() {
