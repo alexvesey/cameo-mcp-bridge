@@ -22,6 +22,7 @@ sourceSets {
 }
 
 dependencies {
+    compileOnly fileTree(dir: "${cameoHome}/lib", include: ['md.jar'])
     compileOnly fileTree(dir: "${cameoHome}/lib", include: ['md_api.jar'])
     compileOnly fileTree(dir: "${cameoHome}/lib", include: ['com.nomagic.magicdraw.uml2-*.jar'])
     compileOnly fileTree(dir: "${cameoHome}/lib", include: ['com.nomagic.magicdraw.foundation-*.jar'])

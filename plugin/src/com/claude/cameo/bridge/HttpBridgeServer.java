@@ -7,6 +7,7 @@ import com.claude.cameo.bridge.handlers.ElementQueryHandler;
 import com.claude.cameo.bridge.handlers.MacroHandler;
 import com.claude.cameo.bridge.handlers.ProjectHandler;
 import com.claude.cameo.bridge.handlers.RelationshipHandler;
+import com.claude.cameo.bridge.handlers.SpecificationHandler;
 import com.sun.net.httpserver.HttpServer;
 import com.sun.net.httpserver.HttpExchange;
 import com.google.gson.JsonObject;
@@ -33,11 +34,16 @@ public class HttpBridgeServer {
         server.createContext("/api/v1/project", new ProjectHandler());
         server.createContext("/api/v1/containment-tree", new ContainmentTreeHandler());
 
-        // Route /elements by HTTP method: GET -> query, POST/PUT/DELETE -> mutation
+        // Route /elements by HTTP method and sub-path
         ElementQueryHandler queryHandler = new ElementQueryHandler();
         ElementMutationHandler mutationHandler = new ElementMutationHandler();
+        SpecificationHandler specificationHandler = new SpecificationHandler();
         server.createContext("/api/v1/elements", exchange -> {
-            if ("GET".equals(exchange.getRequestMethod())) {
+            String path = exchange.getRequestURI().getPath();
+            // Route /specification sub-paths to SpecificationHandler (GET and PUT)
+            if (path.contains("/specification")) {
+                specificationHandler.handle(exchange);
+            } else if ("GET".equals(exchange.getRequestMethod())) {
                 queryHandler.handle(exchange);
             } else {
                 mutationHandler.handle(exchange);
