@@ -466,3 +466,7 @@ Areas where contributions would be especially valuable:
 ## License
 
 [MIT](LICENSE)
+
+## Related: MBSE Agents
+
+Use with [mbse-agents](https://github.com/ajhcs/mbse-agents) for standards-aware modeling across aerospace, defense, automotive, and medical device domains. The agents provide practitioner-level domain knowledge (ARP4754A, DoDAF, ISO 26262, IEC 62304). This bridge provides direct tool access. Together: an AI that knows the standards at the clause level AND can modify your Cameo model.
