@@ -13,6 +13,8 @@ import com.nomagic.uml2.ext.magicdraw.classes.mdkernel.LiteralString;
 import com.nomagic.uml2.ext.magicdraw.classes.mdkernel.NamedElement;
 import com.nomagic.uml2.ext.magicdraw.classes.mdkernel.OpaqueExpression;
 import com.nomagic.uml2.ext.magicdraw.classes.mdkernel.Property;
+import com.nomagic.uml2.ext.magicdraw.classes.mdkernel.Type;
+import com.nomagic.uml2.ext.magicdraw.classes.mdkernel.TypedElement;
 import com.nomagic.uml2.ext.magicdraw.classes.mdkernel.ValueSpecification;
 import com.nomagic.uml2.ext.magicdraw.classes.mdkernel.VisibilityKind;
 import com.nomagic.uml2.ext.magicdraw.classes.mdkernel.VisibilityKindEnum;
@@ -62,7 +64,8 @@ public class SpecificationHandler implements HttpHandler {
         "isDerivedUnion",
         "isOrdered",
         "isUnique",
-        "isActive"
+        "isActive",
+        "type"
     };
 
     @Override
@@ -198,15 +201,11 @@ public class SpecificationHandler implements HttpHandler {
 
             for (String propName : props.keySet()) {
                 JsonElement valueElement = props.get(propName);
-                String stringValue = valueElement.isJsonPrimitive()
-                        ? valueElement.getAsString()
-                        : valueElement.toString();
-
                 // 1. Check tagged values first
                 if (tagToStereotype.containsKey(propName)) {
                     Stereotype stereo = tagToStereotype.get(propName);
                     StereotypesHelper.setStereotypePropertyValue(
-                            element, stereo, propName, stringValue);
+                            element, stereo, propName, coerceJsonValue(valueElement, project));
                     setPropertiesArr.add(propName);
                     setCount++;
                     continue;
@@ -481,6 +480,9 @@ public class SpecificationHandler implements HttpHandler {
                     return setDocumentation(element,
                             value.getAsString(), project);
 
+                case "type":
+                    return setTypedElementType(element, value, project);
+
                 default:
                     return tryRefSetValue(element, propName, value);
             }
@@ -521,6 +523,77 @@ public class SpecificationHandler implements HttpHandler {
             }
         }
         return false;
+    }
+
+    private boolean setTypedElementType(
+            Element element,
+            JsonElement value,
+            com.nomagic.magicdraw.core.Project project) {
+        if (!(element instanceof TypedElement)) {
+            return false;
+        }
+        if (value == null || value.isJsonNull()) {
+            ((TypedElement) element).setType(null);
+            return true;
+        }
+
+        String typeId = null;
+        if (value.isJsonPrimitive() && value.getAsJsonPrimitive().isString()) {
+            typeId = value.getAsString();
+        } else if (value.isJsonObject()) {
+            JsonObject obj = value.getAsJsonObject();
+            if (obj.has("id") && obj.get("id").isJsonPrimitive()) {
+                typeId = obj.get("id").getAsString();
+            }
+        }
+
+        if (typeId == null || typeId.isEmpty()) {
+            return false;
+        }
+
+        Element resolved = (Element) project.getElementByID(typeId);
+        if (!(resolved instanceof Type)) {
+            throw new IllegalArgumentException("Type element not found or not a Type: " + typeId);
+        }
+
+        ((TypedElement) element).setType((Type) resolved);
+        return true;
+    }
+
+    private Object coerceJsonValue(
+            JsonElement value,
+            com.nomagic.magicdraw.core.Project project) {
+        if (value == null || value.isJsonNull()) {
+            return null;
+        }
+        if (value.isJsonArray()) {
+            JsonArray array = value.getAsJsonArray();
+            List<Object> converted = new java.util.ArrayList<>(array.size());
+            for (JsonElement item : array) {
+                converted.add(coerceJsonValue(item, project));
+            }
+            return converted;
+        }
+        if (value.isJsonObject()) {
+            JsonObject obj = value.getAsJsonObject();
+            if (obj.has("id") && obj.get("id").isJsonPrimitive()) {
+                String id = obj.get("id").getAsString();
+                Element referenced = (Element) project.getElementByID(id);
+                if (referenced != null) {
+                    return referenced;
+                }
+            }
+            return obj.toString();
+        }
+
+        JsonPrimitive primitive = value.getAsJsonPrimitive();
+        if (primitive.isBoolean()) {
+            return primitive.getAsBoolean();
+        }
+        if (primitive.isNumber()) {
+            return primitive.getAsNumber();
+        }
+        return primitive.getAsString();
     }
 
     private boolean setDocumentation(Element element, String doc,

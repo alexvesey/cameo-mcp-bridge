@@ -6,6 +6,10 @@ import com.claude.cameo.bridge.util.ElementSerializer;
 import com.claude.cameo.bridge.util.JsonHelper;
 import com.nomagic.magicdraw.uml.ClassTypes;
 import com.nomagic.magicdraw.uml.Finder;
+import com.nomagic.magicdraw.uml2.Connectors;
+import com.nomagic.uml2.ext.magicdraw.compositestructures.mdinternalstructures.ConnectableElement;
+import com.nomagic.uml2.ext.magicdraw.compositestructures.mdinternalstructures.Connector;
+import com.nomagic.uml2.ext.magicdraw.compositestructures.mdinternalstructures.ConnectorEnd;
 import com.nomagic.uml2.ext.magicdraw.classes.mdkernel.DirectedRelationship;
 import com.nomagic.uml2.ext.magicdraw.classes.mdkernel.Element;
 import com.nomagic.uml2.ext.magicdraw.classes.mdkernel.NamedElement;
@@ -279,6 +283,20 @@ public class ElementQueryHandler implements HttpHandler {
                 LOG.log(Level.FINE, "Error reading undirected relationships", e);
             }
 
+            try {
+                if (element instanceof ConnectableElement) {
+                    Collection<Connector> connectors =
+                            Connectors.collectDirectConnectors((ConnectableElement) element);
+                    if (connectors != null) {
+                        for (Connector connector : connectors) {
+                            undirected.add(serializeConnector(connector, elementId));
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                LOG.log(Level.FINE, "Error reading connectors", e);
+            }
+
             JsonObject response = new JsonObject();
             response.addProperty("elementId", elementId);
             response.add("outgoing", outgoing);
@@ -432,6 +450,43 @@ public class ElementQueryHandler implements HttpHandler {
         }
         json.add("relatedElements", relatedElements);
 
+        return json;
+    }
+
+    private JsonObject serializeConnector(Connector connector, String selfId) {
+        JsonObject json = new JsonObject();
+        json.addProperty("relationshipId", connector.getID());
+        json.addProperty("direction", "undirected");
+        json.addProperty("type", "Connector");
+
+        if (connector instanceof NamedElement) {
+            String name = ((NamedElement) connector).getName();
+            if (name != null && !name.isEmpty()) {
+                json.addProperty("name", name);
+            }
+        }
+
+        JsonArray relatedElements = new JsonArray();
+        try {
+            Collection<ConnectorEnd> ends = connector.getEnd();
+            if (ends != null) {
+                for (ConnectorEnd end : ends) {
+                    ConnectableElement role = end.getRole();
+                    if (role == null || selfId.equals(role.getID())) {
+                        continue;
+                    }
+                    JsonObject relJson = new JsonObject();
+                    relJson.addProperty("id", role.getID());
+                    if (role instanceof NamedElement) {
+                        relJson.addProperty("name", ((NamedElement) role).getName());
+                    }
+                    relatedElements.add(relJson);
+                }
+            }
+        } catch (Exception e) {
+            LOG.log(Level.FINE, "Error reading connector ends", e);
+        }
+        json.add("relatedElements", relatedElements);
         return json;
     }
 

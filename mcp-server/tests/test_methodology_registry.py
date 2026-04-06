@@ -25,6 +25,18 @@ class MethodologyRegistryTests(unittest.TestCase):
         self.assertEqual("Use Case Model", recipe.title)
         self.assertEqual("needs", recipe.phase_id)
 
+    def test_logical_architecture_satisfy_direction_matches_runtime(self) -> None:
+        recipe = get_recipe("oosem", "logical_architecture_scaffold")
+
+        satisfy = next(
+            relationship
+            for relationship in recipe.mandatory_relationships
+            if relationship.relationship == "satisfy"
+        )
+
+        self.assertEqual("logical_block", satisfy.source_role)
+        self.assertEqual("system_requirement", satisfy.target_role)
+
 
 if __name__ == "__main__":
     unittest.main()

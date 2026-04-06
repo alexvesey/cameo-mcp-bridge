@@ -6,8 +6,8 @@ import com.claude.cameo.bridge.util.ElementSerializer;
 import com.claude.cameo.bridge.util.JsonHelper;
 import com.nomagic.magicdraw.openapi.uml.ModelElementsManager;
 import com.nomagic.uml2.ext.magicdraw.classes.mdkernel.Comment;
-import com.nomagic.uml2.ext.magicdraw.classes.mdkernel.Element;
 import com.nomagic.uml2.ext.magicdraw.classes.mdkernel.Classifier;
+import com.nomagic.uml2.ext.magicdraw.classes.mdkernel.Element;
 import com.nomagic.uml2.ext.magicdraw.classes.mdkernel.NamedElement;
 import com.nomagic.uml2.ext.magicdraw.classes.mdkernel.Package;
 import com.nomagic.uml2.ext.magicdraw.mdprofiles.Profile;
@@ -17,6 +17,11 @@ import com.nomagic.uml2.ext.jmi.helpers.StereotypesHelper;
 import com.nomagic.uml2.ext.magicdraw.actions.mdbasicactions.CallBehaviorAction;
 import com.nomagic.uml2.ext.magicdraw.commonbehaviors.mdbasicbehaviors.Behavior;
 import com.nomagic.uml2.ext.magicdraw.activities.mdintermediateactivities.ActivityPartition;
+import com.nomagic.uml2.ext.magicdraw.statemachines.mdbehaviorstatemachines.Pseudostate;
+import com.nomagic.uml2.ext.magicdraw.statemachines.mdbehaviorstatemachines.PseudostateKindEnum;
+import com.nomagic.uml2.ext.magicdraw.statemachines.mdbehaviorstatemachines.Region;
+import com.nomagic.uml2.ext.magicdraw.statemachines.mdbehaviorstatemachines.State;
+import com.nomagic.uml2.ext.magicdraw.statemachines.mdbehaviorstatemachines.StateMachine;
 import com.nomagic.uml2.impl.ElementsFactory;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
@@ -88,6 +93,17 @@ public class ElementMutationHandler implements HttpHandler {
             }
             ElementsFactory ef = project.getElementsFactory();
             Element created = createElement(project, ef, parent, type, name, metaclasses);
+            if (created instanceof StateMachine) {
+                ModelElementsManager.getInstance().addElement(created, parent);
+                ensureDefaultRegion(ef, (StateMachine) created);
+            } else if (created instanceof State) {
+                Region ownerRegion = resolveStateRegion(ef, parent, type);
+                ((State) created).setContainer(ownerRegion);
+            } else if (created instanceof Pseudostate) {
+                Region ownerRegion = resolveStateRegion(ef, parent, type);
+                ((Pseudostate) created).setContainer(ownerRegion);
+                ((Pseudostate) created).setKind(PseudostateKindEnum.INITIAL);
+            }
             if (behaviorId != null && created instanceof CallBehaviorAction) {
                 Element behavior = (Element) project.getElementByID(behaviorId);
                 if (behavior instanceof Behavior) {
@@ -100,12 +116,13 @@ public class ElementMutationHandler implements HttpHandler {
                     ((ActivityPartition) created).setRepresents(represents);
                 }
             }
-            if (stereotype != null && !stereotype.isEmpty()) {
-                Stereotype stereo = findStereotype(project, stereotype, null);
-                if (stereo != null) {
+            for (String requestedStereotype : effectiveCreationStereotypes(type, stereotype)) {
+                Stereotype stereo = findStereotype(project, requestedStereotype, null);
+                if (stereo == null) {
+                    throw new IllegalArgumentException("Stereotype not found: " + requestedStereotype);
+                }
+                if (!StereotypesHelper.hasStereotype(created, stereo)) {
                     StereotypesHelper.addStereotype(created, stereo);
-                } else {
-                    LOG.warning("Stereotype not found: " + stereotype);
                 }
             }
             if (documentation != null && !documentation.isEmpty()) {
@@ -305,7 +322,7 @@ public class ElementMutationHandler implements HttpHandler {
             }
             int setCount = 0;
             for (String tagName : values.keySet()) {
-                String tagValue = values.get(tagName).getAsString();
+                Object tagValue = coerceJsonValue(values.get(tagName));
                 StereotypesHelper.setStereotypePropertyValue(element, stereo, tagName, tagValue);
                 setCount++;
             }
@@ -397,7 +414,9 @@ public class ElementMutationHandler implements HttpHandler {
         if (created instanceof NamedElement) {
             ((NamedElement) created).setName(name);
         }
-        ModelElementsManager.getInstance().addElement(created, parent);
+        if (!(created instanceof StateMachine) && !(created instanceof State) && !(created instanceof Pseudostate)) {
+            ModelElementsManager.getInstance().addElement(created, parent);
+        }
         return created;
     }
 
@@ -411,10 +430,21 @@ public class ElementMutationHandler implements HttpHandler {
             case "usecase":       return ef.createUseCaseInstance();
             case "activity":      return ef.createActivityInstance();
             case "actor":         return ef.createActorInstance();
+            case "statemachine":
+            case "state-machine":
+            case "state machine":
+                return ef.createStateMachineInstance();
+            case "state":         return ef.createStateInstance();
+            case "pseudostate":
+            case "initialstate":
+            case "initial-state":
+                return ef.createPseudostateInstance();
             case "requirement":   return ef.createClassInstance();
             case "interface-block":
             case "interfaceblock":
-            case "interface":     return ef.createInterfaceInstance();
+                return ef.createClassInstance();
+            case "interface":
+                return ef.createInterfaceInstance();
             case "constraint-block":
             case "constraintblock": return ef.createClassInstance();
             case "value-type":
@@ -463,11 +493,87 @@ public class ElementMutationHandler implements HttpHandler {
             default:
                 throw new IllegalArgumentException("Unsupported element type: " + type
                         + ". Supported: package, profile, stereotype, block, class, use-case, activity, actor, "
-                        + "requirement, interface-block, constraint-block, value-type, "
-                        + "signal, property, operation, port, enumeration, component, "
+                        + "statemachine, state, pseudostate, initial-state, requirement, interface-block, interface, "
+                        + "constraint-block, value-type, datatype, signal, property, operation, port, enumeration, component, "
                         + "constraint, comment, call-behavior-action, activity-partition, "
                         + "initial-node, activity-final, decision, merge, fork, join, "
                         + "flow-final, input-pin, output-pin, opaque-action, action");
+        }
+    }
+
+    private Region resolveStateRegion(
+            ElementsFactory ef,
+            Element parent,
+            String type) {
+        if (parent instanceof Region) {
+            return (Region) parent;
+        }
+        if (parent instanceof StateMachine) {
+            return ensureDefaultRegion(ef, (StateMachine) parent);
+        }
+        if (parent instanceof State) {
+            return ensureDefaultRegion(ef, (State) parent);
+        }
+        throw new IllegalArgumentException("Parent for " + type + " must be a Region, StateMachine, or State: "
+                + parent.getID());
+    }
+
+    private Region ensureDefaultRegion(ElementsFactory ef, StateMachine stateMachine) {
+        Collection<Region> regions = stateMachine.getRegion();
+        if (regions != null && !regions.isEmpty()) {
+            return regions.iterator().next();
+        }
+        Region region = ef.createRegionInstance();
+        region.setStateMachine(stateMachine);
+        return region;
+    }
+
+    private Region ensureDefaultRegion(ElementsFactory ef, State state) {
+        Collection<Region> regions = state.getRegion();
+        if (regions != null && !regions.isEmpty()) {
+            return regions.iterator().next();
+        }
+        Region region = ef.createRegionInstance();
+        region.setState(state);
+        return region;
+    }
+
+    private List<String> effectiveCreationStereotypes(String type, String explicitStereotype) {
+        List<String> stereotypes = new ArrayList<>();
+
+        String defaultStereotype = defaultCreationStereotype(type);
+        if (defaultStereotype != null) {
+            stereotypes.add(defaultStereotype);
+        }
+
+        if (explicitStereotype != null && !explicitStereotype.isEmpty()) {
+            boolean alreadyPresent = stereotypes.stream()
+                    .anyMatch(existing -> existing.equalsIgnoreCase(explicitStereotype));
+            if (!alreadyPresent) {
+                stereotypes.add(explicitStereotype);
+            }
+        }
+
+        return stereotypes;
+    }
+
+    private String defaultCreationStereotype(String type) {
+        switch (type.toLowerCase()) {
+            case "block":
+                return "block";
+            case "requirement":
+                return "requirement";
+            case "interface-block":
+            case "interfaceblock":
+                return "interfaceBlock";
+            case "constraint-block":
+            case "constraintblock":
+                return "constraintBlock";
+            case "value-type":
+            case "valuetype":
+                return "valueType";
+            default:
+                return null;
         }
     }
 
@@ -508,6 +614,31 @@ public class ElementMutationHandler implements HttpHandler {
             resolved.add(metaClass);
         }
         return resolved;
+    }
+
+    private Object coerceJsonValue(JsonElement value) {
+        if (value == null || value.isJsonNull()) {
+            return null;
+        }
+        if (value.isJsonArray()) {
+            List<Object> coerced = new ArrayList<>();
+            for (JsonElement item : value.getAsJsonArray()) {
+                coerced.add(coerceJsonValue(item));
+            }
+            return coerced;
+        }
+        if (value.isJsonObject()) {
+            return value.toString();
+        }
+
+        var primitive = value.getAsJsonPrimitive();
+        if (primitive.isBoolean()) {
+            return primitive.getAsBoolean();
+        }
+        if (primitive.isNumber()) {
+            return primitive.getAsNumber();
+        }
+        return primitive.getAsString();
     }
 
     private JsonArray toJsonArray(

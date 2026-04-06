@@ -331,6 +331,9 @@ async def create_relationship(
     target_id: str,
     name: Optional[str] = None,
     guard: Optional[str] = None,
+    owner_id: Optional[str] = None,
+    source_part_with_port_id: Optional[str] = None,
+    target_part_with_port_id: Optional[str] = None,
 ) -> dict[str, Any]:
     """Create a relationship between two elements."""
     body: dict[str, Any] = {
@@ -342,6 +345,12 @@ async def create_relationship(
         body["name"] = name
     if guard is not None:
         body["guard"] = guard
+    if owner_id is not None:
+        body["ownerId"] = owner_id
+    if source_part_with_port_id is not None:
+        body["sourcePartWithPortId"] = source_part_with_port_id
+    if target_part_with_port_id is not None:
+        body["targetPartWithPortId"] = target_part_with_port_id
     return await _request("POST", "/relationships", json_body=body)
 
 # -- Diagrams -----------------------------------------------------------------
@@ -377,13 +386,19 @@ async def add_to_diagram(
 ) -> dict[str, Any]:
     """Add a model element to a diagram canvas."""
     body: dict[str, Any] = {"elementId": element_id}
+    has_explicit_width = width is not None and width >= 0
+    has_explicit_height = height is not None and height >= 0
+    if has_explicit_width != has_explicit_height:
+        raise ValueError(
+            "width and height must both be non-negative, or both be omitted/negative"
+        )
     if x is not None:
         body["x"] = x
     if y is not None:
         body["y"] = y
-    if width is not None:
+    if has_explicit_width:
         body["width"] = width
-    if height is not None:
+    if has_explicit_height:
         body["height"] = height
     if container_presentation_id is not None:
         body["containerPresentationId"] = container_presentation_id

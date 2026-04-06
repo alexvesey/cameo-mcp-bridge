@@ -9,10 +9,15 @@ import com.nomagic.uml2.ext.magicdraw.activities.mdbasicactivities.ActivityEdge;
 import com.nomagic.uml2.ext.magicdraw.activities.mdbasicactivities.ControlFlow;
 import com.nomagic.uml2.ext.magicdraw.activities.mdbasicactivities.ObjectFlow;
 import com.nomagic.uml2.ext.magicdraw.activities.mdfundamentalactivities.ActivityNode;
+import com.nomagic.uml2.ext.magicdraw.compositestructures.mdinternalstructures.ConnectableElement;
+import com.nomagic.uml2.ext.magicdraw.compositestructures.mdinternalstructures.Connector;
+import com.nomagic.uml2.ext.magicdraw.compositestructures.mdinternalstructures.ConnectorEnd;
+import com.nomagic.uml2.ext.magicdraw.compositestructures.mdinternalstructures.StructuredClassifier;
 import com.nomagic.uml2.ext.magicdraw.classes.mddependencies.Abstraction;
 import com.nomagic.uml2.ext.magicdraw.classes.mddependencies.Dependency;
 import com.nomagic.uml2.ext.magicdraw.classes.mdkernel.AggregationKindEnum;
 import com.nomagic.uml2.ext.magicdraw.classes.mdkernel.Association;
+import com.nomagic.uml2.ext.magicdraw.classes.mdkernel.Constraint;
 import com.nomagic.uml2.ext.magicdraw.classes.mdkernel.Classifier;
 import com.nomagic.uml2.ext.magicdraw.classes.mdkernel.Element;
 import com.nomagic.uml2.ext.magicdraw.classes.mdkernel.Generalization;
@@ -24,6 +29,9 @@ import com.nomagic.uml2.ext.magicdraw.mdprofiles.Stereotype;
 import com.nomagic.uml2.ext.magicdraw.mdusecases.Extend;
 import com.nomagic.uml2.ext.magicdraw.mdusecases.Include;
 import com.nomagic.uml2.ext.magicdraw.mdusecases.UseCase;
+import com.nomagic.uml2.ext.magicdraw.statemachines.mdbehaviorstatemachines.Region;
+import com.nomagic.uml2.ext.magicdraw.statemachines.mdbehaviorstatemachines.Transition;
+import com.nomagic.uml2.ext.magicdraw.statemachines.mdbehaviorstatemachines.Vertex;
 import com.nomagic.uml2.ext.jmi.helpers.StereotypesHelper;
 import com.nomagic.uml2.impl.ElementsFactory;
 import com.sun.net.httpserver.HttpExchange;
@@ -39,7 +47,8 @@ import java.util.logging.Logger;
 /**
  * Handles relationship creation REST endpoint.
  * POST /api/v1/relationships
- * Body: {type, sourceId, targetId, name?, guard?}
+ * Body: {type, sourceId, targetId, name?, guard?, ownerId?,
+ *        sourcePartWithPortId?, targetPartWithPortId?}
  */
 public class RelationshipHandler implements HttpHandler {
 
@@ -75,6 +84,9 @@ public class RelationshipHandler implements HttpHandler {
         String targetId = JsonHelper.requireString(body, "targetId");
         String name = JsonHelper.optionalString(body, "name");
         String guard = JsonHelper.optionalString(body, "guard");
+        String ownerId = JsonHelper.optionalString(body, "ownerId");
+        String sourcePartWithPortId = JsonHelper.optionalString(body, "sourcePartWithPortId");
+        String targetPartWithPortId = JsonHelper.optionalString(body, "targetPartWithPortId");
 
         JsonObject result = EdtDispatcher.write("Create " + type + " relationship", project -> {
             Element source = (Element) project.getElementByID(sourceId);
@@ -126,6 +138,9 @@ public class RelationshipHandler implements HttpHandler {
                 case "satisfy":
                     relationship = createStereotypedAbstraction(ef, project, source, target, "Satisfy");
                     break;
+                case "verify":
+                    relationship = createStereotypedAbstraction(ef, project, source, target, "Verify");
+                    break;
                 case "derive":
                     relationship = createStereotypedAbstraction(ef, project, source, target, "DeriveReqt");
                     break;
@@ -135,11 +150,24 @@ public class RelationshipHandler implements HttpHandler {
                 case "trace":
                     relationship = createStereotypedAbstraction(ef, project, source, target, "Trace");
                     break;
+                case "transition":
+                    relationship = createTransition(ef, source, target, guard);
+                    break;
+                case "connector":
+                    relationship = createConnector(
+                            ef,
+                            project,
+                            source,
+                            target,
+                            ownerId,
+                            sourcePartWithPortId,
+                            targetPartWithPortId);
+                    break;
                 default:
                     throw new IllegalArgumentException("Unsupported relationship type: " + type
                             + ". Supported: association, directed-association, generalization, "
                             + "include, extend, dependency, control-flow, object-flow, "
-                            + "composition, allocate, satisfy, derive, refine, trace");
+                            + "composition, allocate, satisfy, verify, derive, refine, trace, transition, connector");
             }
 
             if (name != null && relationship instanceof NamedElement) {
@@ -269,6 +297,95 @@ public class RelationshipHandler implements HttpHandler {
             ModelElementsManager.getInstance().addElement(flow, owner);
         }
         return flow;
+    }
+
+    private Transition createTransition(ElementsFactory ef,
+            Element source, Element target, String guard) throws Exception {
+        if (!(source instanceof Vertex) || !(target instanceof Vertex)) {
+            throw new IllegalArgumentException("Transition requires Vertex source and target");
+        }
+
+        Region sourceRegion = ((Vertex) source).getContainer();
+        Region targetRegion = ((Vertex) target).getContainer();
+        if (sourceRegion == null || targetRegion == null) {
+            throw new IllegalArgumentException("Transition endpoints must already belong to a Region");
+        }
+        if (!sourceRegion.getID().equals(targetRegion.getID())) {
+            throw new IllegalArgumentException("Transition source and target must share the same Region");
+        }
+
+        Transition transition = ef.createTransitionInstance();
+        transition.setContainer(sourceRegion);
+        transition.setSource((Vertex) source);
+        transition.setTarget((Vertex) target);
+        if (guard != null && !guard.isEmpty()) {
+            Constraint guardConstraint = ef.createConstraintInstance();
+            guardConstraint.setName("guard");
+            guardConstraint.setContext(sourceRegion);
+            LiteralString guardSpec = ef.createLiteralStringInstance();
+            guardSpec.setValue(guard);
+            guardConstraint.setSpecification(guardSpec);
+            transition.setGuard(guardConstraint);
+        }
+        return transition;
+    }
+
+    private Connector createConnector(
+            ElementsFactory ef,
+            com.nomagic.magicdraw.core.Project project,
+            Element source,
+            Element target,
+            String ownerId,
+            String sourcePartWithPortId,
+            String targetPartWithPortId) throws Exception {
+        if (!(source instanceof ConnectableElement) || !(target instanceof ConnectableElement)) {
+            throw new IllegalArgumentException(
+                    "Connector requires ConnectableElement source and target");
+        }
+        if (ownerId == null || ownerId.isEmpty()) {
+            throw new IllegalArgumentException("Connector requires ownerId");
+        }
+
+        Element owner = (Element) project.getElementByID(ownerId);
+        if (!(owner instanceof StructuredClassifier)) {
+            throw new IllegalArgumentException(
+                    "Connector owner must be a StructuredClassifier: " + ownerId);
+        }
+
+        Connector connector = ef.createConnectorInstance();
+        connector.set_structuredClassifierOfOwnedConnector((StructuredClassifier) owner);
+
+        ConnectorEnd sourceEnd = ef.createConnectorEndInstance();
+        sourceEnd.setRole((ConnectableElement) source);
+        Property sourcePartWithPort = resolvePartWithPort(project, sourcePartWithPortId);
+        if (sourcePartWithPort != null) {
+            sourceEnd.setPartWithPort(sourcePartWithPort);
+        }
+        sourceEnd.set_connectorOfEnd(connector);
+
+        ConnectorEnd targetEnd = ef.createConnectorEndInstance();
+        targetEnd.setRole((ConnectableElement) target);
+        Property targetPartWithPort = resolvePartWithPort(project, targetPartWithPortId);
+        if (targetPartWithPort != null) {
+            targetEnd.setPartWithPort(targetPartWithPort);
+        }
+        targetEnd.set_connectorOfEnd(connector);
+
+        return connector;
+    }
+
+    private Property resolvePartWithPort(
+            com.nomagic.magicdraw.core.Project project,
+            String partWithPortId) {
+        if (partWithPortId == null || partWithPortId.isEmpty()) {
+            return null;
+        }
+        Element partWithPort = (Element) project.getElementByID(partWithPortId);
+        if (!(partWithPort instanceof Property)) {
+            throw new IllegalArgumentException(
+                    "partWithPort element must be a Property: " + partWithPortId);
+        }
+        return (Property) partWithPort;
     }
 
     private Abstraction createStereotypedAbstraction(ElementsFactory ef,

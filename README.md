@@ -207,14 +207,17 @@ And set `CAMEO_BRIDGE_PORT=18741` in your environment before launching Claude Co
 |------|-------------|
 | `cameo_query_elements` | Search by type, name, package, stereotype, with paging and compact/full views |
 | `cameo_get_element` | Get full details of a single element |
-| `cameo_create_element` | Create a new model element (30+ types supported) |
+| `cameo_create_element` | Create a new model element |
 | `cameo_modify_element` | Change name or documentation |
 | `cameo_delete_element` | Remove an element and its children |
 | `cameo_get_containment_tree` | Browse the project hierarchy |
 | `cameo_list_containment_children` | Page/filter immediate children for large models with compact/full views |
 | `cameo_apply_profile` | Apply a profile to a model/package so custom stereotypes become usable |
 
-**Supported element types:** Package, Profile, Stereotype, Class, Block, Property, Port, Activity, StateMachine, Interaction, UseCase, Actor, Requirement, InterfaceBlock, ConstraintBlock, ValueType, DataType, Signal, Enumeration, Component, Comment, Constraint, CallBehaviorAction, OpaqueAction, ActivityPartition, InitialNode, ActivityFinalNode, FlowFinalNode, DecisionNode, MergeNode, ForkNode, JoinNode, InputPin, OutputPin, Operation
+**Supported element types:** Package, Profile, Stereotype, Class, Block, Property, Port, Interface, Activity, UseCase, Actor, StateMachine, State, Pseudostate, InitialState, Requirement, InterfaceBlock, ConstraintBlock, ValueType, DataType, Signal, Enumeration, Component, Comment, Constraint, CallBehaviorAction, OpaqueAction, ActivityPartition, InitialNode, ActivityFinalNode, FlowFinalNode, DecisionNode, MergeNode, ForkNode, JoinNode, InputPin, OutputPin, Operation
+
+SysML aliases such as `Block`, `Requirement`, `ConstraintBlock`, `InterfaceBlock`, and `ValueType` rely on the SysML profile being available. The bridge now treats missing required stereotypes as an error instead of silently producing plain UML elements.
+`Pseudostate` currently maps to an initial pseudostate in the MVP.
 
 For large projects, prefer `cameo_list_containment_children` over `cameo_get_containment_tree`. The recursive tree endpoint is still available for compatibility, but it can produce very large responses on real models.
 
@@ -239,7 +242,7 @@ If you create a custom profile through MCP, the typical sequence is:
 | `cameo_create_relationship` | Create a relationship between two elements |
 | `cameo_get_relationships` | Query relationships for an element |
 
-**Supported relationship types:** Association, DirectedAssociation, Composition, Generalization, Dependency, ControlFlow, ObjectFlow, Allocate, Satisfy, Derive, Refine, Trace, Include, Extend
+**Supported relationship types:** Association, DirectedAssociation, Composition, Generalization, Dependency, ControlFlow, ObjectFlow, Transition, Connector, Allocate, Satisfy, Derive, Refine, Trace, Verify, Include, Extend
 
 ### Diagrams (10 tools)
 
@@ -302,12 +305,13 @@ The AI will:
 1. Call `cameo_get_project` to find the root model ID
 2. Call `cameo_create_element` with type "Block", name "Sensor", and the root model ID as parent
 
-### Build a State Machine
+### Build A State Machine
 
 ```
-Create a state machine for an ATM with states: OFF, IDLE, ACTIVE, MAINTENANCE.
-Add transitions: OFF->IDLE on startup, IDLE->ACTIVE on card insert,
-ACTIVE->IDLE when transaction complete, any state->MAINTENANCE on service request.
+Create a state machine for an ATM with states OFF, IDLE, ACTIVE, and MAINTENANCE.
+Add an initial pseudostate and transitions: initial -> OFF, OFF -> IDLE on startup,
+IDLE -> ACTIVE on card insert, ACTIVE -> IDLE on transaction complete, and any state
+-> MAINTENANCE on service request.
 ```
 
 ### Query and Modify
@@ -334,7 +338,7 @@ Run a macro that lists all profiles loaded in the current project
 
 The bridge builds models correctly -- elements, relationships, directionality, stereotypes, and structure all come out right. The main gap is **diagram presentation**: layout, spacing, and visual properties of complex diagrams often need manual adjustment in Cameo's GUI.
 
-**Root cause:** `cameo_list_diagram_shapes` and `cameo_move_shapes` only operate on **top-level** presentation elements. Shapes nested inside composite states, swimlanes, combined fragments, or interaction uses are invisible to the bridge. This means:
+`cameo_list_diagram_shapes` now discovers nested presentation elements recursively, but complex nested editing is still incomplete. Sequence diagrams, composite states, and other deeply nested presentations can still require manual cleanup or Groovy fallbacks. This means:
 
 | What Doesn't Work | Why |
 |---|---|
@@ -351,7 +355,7 @@ The bridge builds models correctly -- elements, relationships, directionality, s
 - For sequence diagrams: the model is correct, so manual drag-and-drop in Cameo takes 5-10 minutes
 - For state machines: widen shapes and toggle region name visibility manually
 
-**Planned fix:** Make shape listing and manipulation recursive so nested presentation elements are accessible.
+**Current direction:** Keep expanding structured editing for nested presentation elements so fewer workflows require macros.
 
 ### Not Yet Implemented
 - **Remove stereotype** -- can apply but not remove
@@ -360,7 +364,6 @@ The bridge builds models correctly -- elements, relationships, directionality, s
 - **Undo/redo** -- sessions support undo in Cameo's UI, but no MCP tool to trigger it
 - **Bulk operations** -- creating N elements requires N sequential API calls
 - **Model change notifications** -- purely request/response; no event subscription
-- **Verify relationship** -- `allocate`, `satisfy`, `derive`, `refine`, `trace` are supported, but `verify` is missing
 - **File-based diagram export** -- `cameo_get_diagram_image` returns base64 over the wire; no option to save directly to a file path (use `cameo_execute_macro` with `ImageExporter.export(dpe, ImageExporter.PNG, file)` as a workaround)
 
 ### API Gaps

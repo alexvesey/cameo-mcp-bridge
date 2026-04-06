@@ -405,7 +405,7 @@ OOSEM_PACK = PackDefinition(
             title="Traceability chain is present",
             scope="model",
             required=True,
-            signals=("needs trace to requirements", "requirements satisfy blocks", "test cases verify requirements"),
+            signals=("needs trace to requirements", "blocks satisfy requirements", "test cases verify requirements"),
         ),
         ChecklistItem(
             id="pack.layout",
@@ -773,11 +773,11 @@ OOSEM_PACK = PackDefinition(
                     rationale="The requirements package must surface back-trace links for review.",
                 ),
                 MandatoryRelationship(
-                    source_role="system_requirement",
+                    source_role="logical_block",
                     relationship="satisfy",
-                    target_role="logical_block",
+                    target_role="system_requirement",
                     required=False,
-                    rationale="System requirements should be allocatable to logical architecture blocks.",
+                    rationale="Logical blocks should explicitly satisfy the system requirements they implement.",
                 ),
             ),
             conformance_checks=(
@@ -873,11 +873,11 @@ OOSEM_PACK = PackDefinition(
             ),
             mandatory_relationships=(
                 MandatoryRelationship(
-                    source_role="system_requirement",
+                    source_role="logical_block",
                     relationship="satisfy",
-                    target_role="logical_block",
+                    target_role="system_requirement",
                     required=True,
-                    rationale="Architecture must explain how requirements are satisfied.",
+                    rationale="Architecture must explain which logical blocks satisfy each requirement.",
                 ),
                 MandatoryRelationship(
                     source_role="logical_block",

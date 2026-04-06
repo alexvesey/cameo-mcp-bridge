@@ -297,9 +297,9 @@ async def cameo_query_elements(
 
     Args:
         type: UML/SysML metaclass to filter by. Common values:
-              Class, Package, Property, Port, Activity, State,
-              Block (SysML), Requirement (SysML), ConstraintBlock (SysML),
-              FlowPort, InterfaceBlock, ValueType.
+              Class, Package, Property, Port, Activity, StateMachine, State,
+              Pseudostate, Block (SysML), Requirement (SysML),
+              ConstraintBlock (SysML), FlowPort, InterfaceBlock, ValueType.
         name: Exact or partial element name to match.
         package_name: Restrict search to a specific package by name.
         stereotype: Filter by applied stereotype name (e.g. "block",
@@ -430,24 +430,30 @@ async def cameo_create_element(
     """Create a new model element.
 
     Args:
-        type: The UML/SysML metaclass. Valid values include:
-              - Structural: Class, Package, Profile, Property, Port, Interface,
-                DataType, Enumeration, Signal, Component, Node
+        type: The UML/SysML element type alias. Structured creation currently
+              supports:
+              - Structural: Package, Profile, Class, Property, Port,
+                Interface, DataType, Enumeration, Signal, Component, Operation
               - Profiles: Stereotype (owned by a Profile; use metaclasses to bind)
-              - SysML: Block, ConstraintBlock, InterfaceBlock, ValueType,
-                FlowSpecification, Requirement
-              - Behavioral: Activity, StateMachine, Interaction,
-                OpaqueBehavior, UseCase, Actor
+              - SysML aliases: Block, ConstraintBlock, InterfaceBlock,
+                Requirement, ValueType
+              - Behavioral: Activity, UseCase, Actor, StateMachine, State
+              - State nodes: Pseudostate (initial kind), InitialState
               - Activity nodes: InitialNode, ActivityFinalNode,
                 FlowFinalNode, DecisionNode, MergeNode, ForkNode, JoinNode
               - Actions: CallBehaviorAction, OpaqueAction
               - Partitions: ActivityPartition
               - Pins: InputPin, OutputPin
-              - Other: Comment, Constraint, InstanceSpecification
+              - Other: Comment, Constraint
+              SysML aliases rely on the SysML profile being available; if the
+              bridge cannot resolve the required stereotype, creation fails
+              instead of silently producing a plain UML element.
         name: Display name for the element.
         parent_id: ID of the parent element (usually a Package or Block).
         stereotype: Optional stereotype to apply on creation (e.g. "block",
-                    "requirement", "valueType", "flowPort").
+                    "requirement", "valueType"). When omitted for a SysML alias
+                    such as Block or Requirement, the bridge applies the
+                    corresponding SysML stereotype automatically.
         documentation: Optional description/documentation string.
         behavior_id: For CallBehaviorAction type only -- links the action to
                      the Activity it invokes. The referenced element must be
@@ -636,23 +642,29 @@ async def cameo_create_relationship(
     target_id: str,
     name: Optional[str] = None,
     guard: Optional[str] = None,
+    owner_id: Optional[str] = None,
+    source_part_with_port_id: Optional[str] = None,
+    target_part_with_port_id: Optional[str] = None,
 ) -> dict[str, Any]:
     """Create a relationship between two elements.
 
     Args:
-        type: Relationship metaclass. Valid values include:
-              - Structural: Association, Composition, Aggregation,
-                Generalization, Realization, InterfaceRealization,
-                Dependency, Usage, Abstraction
-              - SysML: Allocate, Copy, DeriveReqt, Satisfy, Verify,
-                Refine, Trace, FlowPort (connector)
-              - Behavioral: Transition, ControlFlow, ObjectFlow,
-                InformationFlow, Connector
-              - Other: PackageImport, ElementImport
+        type: Structured relationship type. Supported values are:
+              Association, DirectedAssociation, Composition,
+              Generalization, Dependency, Include, Extend,
+              ControlFlow, ObjectFlow, Allocate, Satisfy,
+              Derive, Refine, Trace, Verify, Transition, Connector.
         source_id: ID of the source element.
         target_id: ID of the target element.
         name: Optional name for the relationship.
-        guard: Optional guard condition (for transitions/flows).
+        guard: Optional guard condition for Transition, ControlFlow, or
+               ObjectFlow.
+        owner_id: Required for Connector. ID of the owning structured
+                  classifier that should contain the connector.
+        source_part_with_port_id: Optional for Connector. Property ID for the
+                  source end's partWithPort when connecting a nested port.
+        target_part_with_port_id: Optional for Connector. Property ID for the
+                  target end's partWithPort when connecting a nested port.
 
     Returns:
         JSON with the created relationship ID and details.
@@ -663,6 +675,9 @@ async def cameo_create_relationship(
         target_id=target_id,
         name=name,
         guard=guard,
+        owner_id=owner_id,
+        source_part_with_port_id=source_part_with_port_id,
+        target_part_with_port_id=target_part_with_port_id,
     )
     return _mcp_result(result)
 
@@ -748,15 +763,18 @@ async def cameo_add_to_diagram(
     """Add a model element to a diagram canvas.
 
     Place an existing model element onto a diagram at the specified
-    coordinates. Use width/height of -1 to auto-size.
+    coordinates. Use width/height below zero to keep Cameo's auto-size.
 
     Args:
         diagram_id: The unique ID of the target diagram.
         element_id: The unique ID of the element to add.
         x: Horizontal position in pixels from the left. Defaults to 100.
         y: Vertical position in pixels from the top. Defaults to 100.
-        width: Shape width in pixels. Use -1 for auto-size. Defaults to -1.
-        height: Shape height in pixels. Use -1 for auto-size. Defaults to -1.
+        width: Shape width in pixels. Use a negative value to omit the resize
+               request and keep Cameo's auto-size. Defaults to -1.
+        height: Shape height in pixels. Use a negative value to omit the
+                resize request and keep Cameo's auto-size. Defaults to -1.
+                If you set one explicitly, you must set both explicitly.
         container_presentation_id: Optional presentationId of a container
             shape (e.g., a swimlane or system boundary) to place this element
             inside. If omitted, the element is placed directly on the diagram
@@ -1113,8 +1131,10 @@ async def cameo_set_specification(
 
     Common properties you can set:
     - name, visibility (public/private/protected/package)
-    - isAbstract, isFinalSpecialization (boolean as string)
+    - isAbstract, isFinalSpecialization (boolean)
     - documentation (element documentation text)
+    - type (for TypedElements such as Property, Port, and Pins) using an
+      element ID string or {"id": "<element-id>"} to point at an existing type
     - Any tagged value from an applied stereotype
 
     Common constraint fields (for Use Cases):
@@ -1124,6 +1144,7 @@ async def cameo_set_specification(
         element_id: The unique ID of the element to modify.
         properties: Dictionary of property-name to value mappings.
                     Example: {"name": "NewName", "visibility": "public"}.
+                    Type example: {"type": "01234567-89ab-cdef-0123-456789abcdef"}.
         constraints: Dictionary of constraint-name to text mappings.
                      These create or update named Constraint elements
                      owned by the target element.
