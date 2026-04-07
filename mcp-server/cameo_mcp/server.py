@@ -6,7 +6,7 @@ from typing import Any, Optional
 
 from mcp.server.fastmcp import FastMCP
 
-from cameo_mcp import client
+from cameo_mcp import client, verification
 from cameo_mcp.methodology import (
     execute_methodology_recipe,
     generate_review_packet,
@@ -297,9 +297,10 @@ async def cameo_query_elements(
 
     Args:
         type: UML/SysML metaclass to filter by. Common values:
-              Class, Package, Property, Port, Activity, State,
-              Block (SysML), Requirement (SysML), ConstraintBlock (SysML),
-              FlowPort, InterfaceBlock, ValueType.
+              Class, Package, Property, Port, Activity, StateMachine, State,
+              Pseudostate, Block (SysML), Requirement (SysML),
+              ConstraintBlock (SysML), FlowProperty (SysML),
+              InterfaceBlock, ValueType.
         name: Exact or partial element name to match.
         package_name: Restrict search to a specific package by name.
         stereotype: Filter by applied stereotype name (e.g. "block",
@@ -430,24 +431,31 @@ async def cameo_create_element(
     """Create a new model element.
 
     Args:
-        type: The UML/SysML metaclass. Valid values include:
-              - Structural: Class, Package, Profile, Property, Port, Interface,
-                DataType, Enumeration, Signal, Component, Node
+        type: The UML/SysML element type alias. Structured creation currently
+              supports:
+              - Structural: Package, Profile, Class, Property, Port,
+                FlowProperty, Interface, DataType, Enumeration, Signal,
+                Component, Operation
               - Profiles: Stereotype (owned by a Profile; use metaclasses to bind)
-              - SysML: Block, ConstraintBlock, InterfaceBlock, ValueType,
-                FlowSpecification, Requirement
-              - Behavioral: Activity, StateMachine, Interaction,
-                OpaqueBehavior, UseCase, Actor
+              - SysML aliases: Block, ConstraintBlock, InterfaceBlock,
+                Requirement, ValueType, FlowProperty
+              - Behavioral: Activity, UseCase, Actor, StateMachine, State
+              - State nodes: Pseudostate (initial kind), InitialState
               - Activity nodes: InitialNode, ActivityFinalNode,
                 FlowFinalNode, DecisionNode, MergeNode, ForkNode, JoinNode
               - Actions: CallBehaviorAction, OpaqueAction
               - Partitions: ActivityPartition
               - Pins: InputPin, OutputPin
-              - Other: Comment, Constraint, InstanceSpecification
+              - Other: Comment, Constraint
+              SysML aliases rely on the SysML profile being available; if the
+              bridge cannot resolve the required stereotype, creation fails
+              instead of silently producing a plain UML element.
         name: Display name for the element.
         parent_id: ID of the parent element (usually a Package or Block).
         stereotype: Optional stereotype to apply on creation (e.g. "block",
-                    "requirement", "valueType", "flowPort").
+                    "requirement", "valueType"). When omitted for a SysML alias
+                    such as Block or Requirement, the bridge applies the
+                    corresponding SysML stereotype automatically.
         documentation: Optional description/documentation string.
         behavior_id: For CallBehaviorAction type only -- links the action to
                      the Activity it invokes. The referenced element must be
@@ -636,23 +644,42 @@ async def cameo_create_relationship(
     target_id: str,
     name: Optional[str] = None,
     guard: Optional[str] = None,
+    owner_id: Optional[str] = None,
+    source_part_with_port_id: Optional[str] = None,
+    target_part_with_port_id: Optional[str] = None,
+    realizing_connector_id: Optional[str] = None,
+    conveyed_ids: Optional[list[str]] = None,
+    item_property_id: Optional[str] = None,
 ) -> dict[str, Any]:
     """Create a relationship between two elements.
 
     Args:
-        type: Relationship metaclass. Valid values include:
-              - Structural: Association, Composition, Aggregation,
-                Generalization, Realization, InterfaceRealization,
-                Dependency, Usage, Abstraction
-              - SysML: Allocate, Copy, DeriveReqt, Satisfy, Verify,
-                Refine, Trace, FlowPort (connector)
-              - Behavioral: Transition, ControlFlow, ObjectFlow,
-                InformationFlow, Connector
-              - Other: PackageImport, ElementImport
+        type: Structured relationship type. Supported values are:
+              Association, DirectedAssociation, Composition,
+              Generalization, Dependency, Include, Extend,
+              ControlFlow, ObjectFlow, Allocate, Satisfy,
+              Derive, Refine, Trace, Verify, Transition, Connector,
+              InformationFlow, ItemFlow.
         source_id: ID of the source element.
         target_id: ID of the target element.
         name: Optional name for the relationship.
-        guard: Optional guard condition (for transitions/flows).
+        guard: Optional guard condition for Transition, ControlFlow, or
+               ObjectFlow.
+        owner_id: Required for Connector. ID of the owning structured
+                  classifier that should contain the connector. Required for
+                  InformationFlow and ItemFlow too; use the owning package or
+                  an element within the IBD context. The bridge resolves the
+                  actual relationship containment to the nearest package.
+        source_part_with_port_id: Optional for Connector. Property ID for the
+                  source end's partWithPort when connecting a nested port.
+        target_part_with_port_id: Optional for Connector. Property ID for the
+                  target end's partWithPort when connecting a nested port.
+        realizing_connector_id: Optional for InformationFlow or ItemFlow.
+                  Connector ID that realizes the conveyed item flow on an IBD.
+        conveyed_ids: Optional for InformationFlow or ItemFlow. Classifier IDs
+                  representing the conveyed item/block types.
+        item_property_id: Optional for ItemFlow. Property ID of the
+                  FlowProperty that types the item flow payload/direction.
 
     Returns:
         JSON with the created relationship ID and details.
@@ -663,6 +690,12 @@ async def cameo_create_relationship(
         target_id=target_id,
         name=name,
         guard=guard,
+        owner_id=owner_id,
+        source_part_with_port_id=source_part_with_port_id,
+        target_part_with_port_id=target_part_with_port_id,
+        realizing_connector_id=realizing_connector_id,
+        conveyed_ids=conveyed_ids,
+        item_property_id=item_property_id,
     )
     return _mcp_result(result)
 
@@ -688,7 +721,175 @@ async def cameo_get_relationships(
     )
     return _mcp_result(result)
 
+# -- Matrices -----------------------------------------------------------------
+
+
+@mcp.tool()
+async def cameo_list_matrices(
+    kind: Optional[str] = None,
+    owner_id: Optional[str] = None,
+) -> dict[str, Any]:
+    """List supported native requirement matrices in the current project.
+
+    This matrix family is intentionally separate from the diagram shape/path API.
+    It targets Cameo's native requirement-matrix artifacts, not arbitrary tables.
+
+    Args:
+        kind: Optional matrix kind filter. Supported values:
+              - "refine" for native Refine Requirement Matrix artifacts
+              - "derive" for native Derive Requirement Matrix artifacts
+        owner_id: Optional package/namespace ID that owns the matrix artifact.
+
+    Returns:
+        JSON with matching matrix IDs, names, native matrix types, and owners.
+    """
+    result = await client.list_matrices(
+        kind=kind,
+        owner_id=owner_id,
+    )
+    return _mcp_result(result)
+
+
+@mcp.tool()
+async def cameo_get_matrix(matrix_id: str) -> dict[str, Any]:
+    """Read one supported native requirement matrix with populated cell data.
+
+    Supported matrix artifacts currently include:
+    - Refine Requirement Matrix
+    - Derive Requirement Matrix
+
+    The response includes row and column elements plus only the populated cells.
+    Empty cells are omitted from `populatedCells`; infer gaps from the row/column
+    cross-product.
+
+    Args:
+        matrix_id: Diagram ID of the matrix artifact.
+
+    Returns:
+        JSON with matrix metadata, scope/type settings, rows, columns, and
+        populated cells with their underlying relationship causes.
+    """
+    result = await client.get_matrix(matrix_id)
+    return _mcp_result(result)
+
+
+@mcp.tool()
+async def cameo_verify_matrix_consistency(
+    matrix_id: str,
+    expected_row_ids: Optional[list[str]] = None,
+    expected_column_ids: Optional[list[str]] = None,
+    expected_dependency_names: Optional[list[str]] = None,
+    min_populated_cell_count: int = 0,
+    min_density: float = 0.0,
+) -> dict[str, Any]:
+    """Run quantitative consistency checks against one native requirement matrix.
+
+    This wraps cameo_get_matrix with reusable checks for expected row/column
+    membership, dependency names, populated-cell count, and matrix density.
+
+    Args:
+        matrix_id: Diagram ID of the matrix artifact to validate.
+        expected_row_ids: Optional element IDs that must appear in the row domain.
+        expected_column_ids: Optional element IDs that must appear in the
+            column domain.
+        expected_dependency_names: Optional relationship names that must appear
+            in populated matrix cells.
+        min_populated_cell_count: Minimum populated-cell count required.
+        min_density: Minimum required populated-cell density over the full
+            row/column cross-product.
+
+    Returns:
+        JSON with pass/fail status, detailed checks, and computed metrics.
+    """
+    matrix = await client.get_matrix(matrix_id)
+    result = verification.verify_matrix_consistency(
+        matrix,
+        expected_row_ids=expected_row_ids,
+        expected_column_ids=expected_column_ids,
+        expected_dependency_names=expected_dependency_names,
+        min_populated_cell_count=min_populated_cell_count,
+        min_density=min_density,
+    )
+    result["matrix"] = matrix
+    return _mcp_result(result)
+
+
+@mcp.tool()
+async def cameo_list_matrix_kinds() -> dict[str, Any]:
+    """List the validated native matrix kinds and example type domains."""
+    return {
+        "count": len(client.VALIDATED_MATRIX_KINDS),
+        "matrixKinds": client.VALIDATED_MATRIX_KINDS,
+    }
+
+
+@mcp.tool()
+async def cameo_create_matrix(
+    kind: str,
+    parent_id: str,
+    name: Optional[str] = None,
+    scope_id: Optional[str] = None,
+    row_scope_id: Optional[str] = None,
+    column_scope_id: Optional[str] = None,
+    row_types: Optional[list[str]] = None,
+    column_types: Optional[list[str]] = None,
+) -> dict[str, Any]:
+    """Create a native refine or derive requirement matrix artifact.
+
+    This creates Cameo's native matrix types:
+    - "refine" -> Refine Requirement Matrix
+    - "derive" -> Derive Requirement Matrix
+
+    The bridge configures the matrix to show all relevant rows/columns inside the
+    selected scope so missing traceability remains visible.
+
+    Args:
+        kind: Matrix kind: "refine" or "derive". Aliases such as
+              "Refine Requirement Matrix" and "Derive Requirement Matrix"
+              are normalized automatically.
+        parent_id: Namespace/package ID that will own the matrix artifact.
+        name: Optional display name. Defaults to Cameo's native matrix type name.
+        scope_id: Optional shared scope root for both rows and columns. Defaults
+                  to parent_id when row_scope_id/column_scope_id are omitted.
+        row_scope_id: Optional explicit row scope root.
+        column_scope_id: Optional explicit column scope root.
+        row_types: Optional row-domain type tokens. Each token may be a UML
+                  metaclass such as "UseCase" or "Property", or a stereotype
+                  such as "Block", "Requirement", or "valueProperty". When
+                  omitted, the bridge uses the native matrix defaults.
+        column_types: Optional column-domain type tokens using the same
+                  resolution rules as row_types.
+
+    Returns:
+        JSON confirmation with the created matrix artifact and its initial
+        populated row/column/cell data.
+    """
+    result = await client.create_matrix(
+        kind=kind,
+        parent_id=parent_id,
+        name=name,
+        scope_id=scope_id,
+        row_scope_id=row_scope_id,
+        column_scope_id=column_scope_id,
+        row_types=row_types,
+        column_types=column_types,
+    )
+    return _mcp_result(result)
+
 # -- Diagrams -----------------------------------------------------------------
+
+
+@mcp.tool()
+async def cameo_list_diagram_types() -> dict[str, Any]:
+    """List the validated diagram request tokens accepted by the MCP bridge.
+
+    Returns the canonical request token to use, the native Cameo diagram type
+    it resolves to, and the common aliases that are normalized to that token.
+    """
+    return {
+        "count": len(client.VALIDATED_DIAGRAM_TYPES),
+        "diagramTypes": client.VALIDATED_DIAGRAM_TYPES,
+    }
 
 
 @mcp.tool()
@@ -713,13 +914,15 @@ async def cameo_create_diagram(
 
     Args:
         type: Diagram type. Valid values include:
-              - SysML: BlockDefinitionDiagram (BDD),
-                InternalBlockDiagram (IBD), RequirementDiagram,
-                ParametricDiagram, ActivityDiagram, SequenceDiagram,
-                StateMachineDiagram, UseCaseDiagram, PackageDiagram
-              - UML: ClassDiagram, ComponentDiagram, DeploymentDiagram,
-                ObjectDiagram, ProfileDiagram, CommunicationDiagram,
-                TimingDiagram, InteractionOverviewDiagram
+              - SysML: "BDD", "IBD", "Requirement Diagram",
+                "Parametric Diagram"
+              - UML: "Class", "Package", "UseCase", "Activity",
+                "Sequence", "StateMachine", "Component", "Deployment",
+                "CompositeStructure", "Object", "Communication",
+                "InteractionOverview", "Timing", "Profile"
+              Common aliases such as "InternalBlockDiagram",
+              "SysML IBD", "ClassDiagram", or "StateMachineDiagram"
+              are normalized to this validated token set automatically.
         name: Display name for the diagram.
         parent_id: ID of the parent element that owns this diagram
                    (typically a Package or Block).
@@ -748,15 +951,18 @@ async def cameo_add_to_diagram(
     """Add a model element to a diagram canvas.
 
     Place an existing model element onto a diagram at the specified
-    coordinates. Use width/height of -1 to auto-size.
+    coordinates. Use width/height below zero to keep Cameo's auto-size.
 
     Args:
         diagram_id: The unique ID of the target diagram.
         element_id: The unique ID of the element to add.
         x: Horizontal position in pixels from the left. Defaults to 100.
         y: Vertical position in pixels from the top. Defaults to 100.
-        width: Shape width in pixels. Use -1 for auto-size. Defaults to -1.
-        height: Shape height in pixels. Use -1 for auto-size. Defaults to -1.
+        width: Shape width in pixels. Use a negative value to omit the resize
+               request and keep Cameo's auto-size. Defaults to -1.
+        height: Shape height in pixels. Use a negative value to omit the
+                resize request and keep Cameo's auto-size. Defaults to -1.
+                If you set one explicitly, you must set both explicitly.
         container_presentation_id: Optional presentationId of a container
             shape (e.g., a swimlane or system boundary) to place this element
             inside. If omitted, the element is placed directly on the diagram
@@ -791,6 +997,64 @@ async def cameo_get_diagram_image(diagram_id: str) -> dict[str, Any]:
         JSON with base64-encoded image data and metadata (width, height).
     """
     result = await client.get_diagram_image(diagram_id)
+    return _mcp_result(result)
+
+
+@mcp.tool()
+async def cameo_verify_diagram_visual(
+    diagram_id: str,
+    expected_element_ids: Optional[list[str]] = None,
+    expected_relationship_ids: Optional[list[str]] = None,
+    min_shape_count: int = 0,
+    min_relationship_shape_count: int = 0,
+    min_width: int = 1,
+    min_height: int = 1,
+    min_image_bytes: int = 1,
+    min_content_coverage_ratio: float = 0.0,
+    max_overlap_ratio: float = 1.0,
+) -> dict[str, Any]:
+    """Run reusable visual verification checks against one diagram.
+
+    This combines cameo_get_diagram_image and cameo_list_diagram_shapes into a
+    stable visual verification result that checks image payload validity,
+    rendered size, expected element/path presence, and coarse overlap risk.
+
+    Args:
+        diagram_id: The unique ID of the diagram to validate.
+        expected_element_ids: Optional model element IDs that must appear on
+            the diagram canvas.
+        expected_relationship_ids: Optional relationship element IDs that must
+            appear specifically as relationship paths.
+        min_shape_count: Minimum number of presentation elements expected.
+        min_relationship_shape_count: Minimum number of relationship paths
+            expected on the diagram.
+        min_width: Minimum rendered image width in pixels.
+        min_height: Minimum rendered image height in pixels.
+        min_image_bytes: Minimum PNG payload size in bytes.
+        min_content_coverage_ratio: Minimum non-background pixel coverage ratio
+            over the rendered image area.
+        max_overlap_ratio: Maximum allowed sibling-shape overlap ratio.
+
+    Returns:
+        JSON with pass/fail status, check details, and both image/shape metrics.
+    """
+    diagram_image = await client.get_diagram_image(diagram_id)
+    diagram_shapes = await client.list_diagram_shapes(diagram_id)
+    result = verification.verify_diagram_visual(
+        diagram_image,
+        diagram_shapes,
+        expected_element_ids=expected_element_ids,
+        expected_relationship_ids=expected_relationship_ids,
+        min_shape_count=min_shape_count,
+        min_relationship_shape_count=min_relationship_shape_count,
+        min_width=min_width,
+        min_height=min_height,
+        min_image_bytes=min_image_bytes,
+        min_content_coverage_ratio=min_content_coverage_ratio,
+        max_overlap_ratio=max_overlap_ratio,
+    )
+    result["diagramImage"] = diagram_image
+    result["diagramShapes"] = diagram_shapes
     return _mcp_result(result)
 
 
@@ -1113,8 +1377,10 @@ async def cameo_set_specification(
 
     Common properties you can set:
     - name, visibility (public/private/protected/package)
-    - isAbstract, isFinalSpecialization (boolean as string)
+    - isAbstract, isFinalSpecialization (boolean)
     - documentation (element documentation text)
+    - type (for TypedElements such as Property, Port, and Pins) using an
+      element ID string or {"id": "<element-id>"} to point at an existing type
     - Any tagged value from an applied stereotype
 
     Common constraint fields (for Use Cases):
@@ -1124,6 +1390,7 @@ async def cameo_set_specification(
         element_id: The unique ID of the element to modify.
         properties: Dictionary of property-name to value mappings.
                     Example: {"name": "NewName", "visibility": "public"}.
+                    Type example: {"type": "01234567-89ab-cdef-0123-456789abcdef"}.
         constraints: Dictionary of constraint-name to text mappings.
                      These create or update named Constraint elements
                      owned by the target element.

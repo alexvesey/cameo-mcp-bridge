@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from typing import Any, Optional
 
 import httpx
@@ -10,6 +11,78 @@ import httpx
 BRIDGE_PLUGIN_VERSION = "1.0.0"
 BRIDGE_API_VERSION = "v1"
 BRIDGE_HANDSHAKE_VERSION = "1"
+
+
+VALIDATED_DIAGRAM_TYPES: list[dict[str, Any]] = [
+    {"canonical": "Class", "nativeType": "Class Diagram", "family": "uml", "aliases": ["class", "ClassDiagram", "Class Diagram"]},
+    {"canonical": "Package", "nativeType": "Package Diagram", "family": "uml", "aliases": ["package", "PackageDiagram", "Package Diagram"]},
+    {"canonical": "UseCase", "nativeType": "Use Case Diagram", "family": "uml", "aliases": ["usecase", "use case", "UseCaseDiagram", "Use Case Diagram"]},
+    {"canonical": "Activity", "nativeType": "Activity Diagram", "family": "uml", "aliases": ["activity", "ActivityDiagram", "Activity Diagram"]},
+    {"canonical": "Sequence", "nativeType": "Sequence Diagram", "family": "uml", "aliases": ["sequence", "SequenceDiagram", "Sequence Diagram"]},
+    {"canonical": "StateMachine", "nativeType": "State Machine Diagram", "family": "uml", "aliases": ["statemachine", "state machine", "StateMachineDiagram", "State Machine Diagram"]},
+    {"canonical": "Component", "nativeType": "Component Diagram", "family": "uml", "aliases": ["component", "ComponentDiagram", "Component Diagram"]},
+    {"canonical": "Deployment", "nativeType": "Deployment Diagram", "family": "uml", "aliases": ["deployment", "DeploymentDiagram", "Deployment Diagram"]},
+    {"canonical": "CompositeStructure", "nativeType": "Composite Structure Diagram", "family": "uml", "aliases": ["compositestructure", "composite structure", "CompositeStructureDiagram", "Composite Structure Diagram"]},
+    {"canonical": "Object", "nativeType": "Object Diagram", "family": "uml", "aliases": ["object", "ObjectDiagram", "Object Diagram"]},
+    {"canonical": "Communication", "nativeType": "Communication Diagram", "family": "uml", "aliases": ["communication", "CommunicationDiagram", "Communication Diagram"]},
+    {"canonical": "InteractionOverview", "nativeType": "Interaction Overview Diagram", "family": "uml", "aliases": ["interactionoverview", "interaction overview", "InteractionOverviewDiagram", "Interaction Overview Diagram"]},
+    {"canonical": "Timing", "nativeType": "Timing Diagram", "family": "uml", "aliases": ["timing", "TimingDiagram", "Timing Diagram"]},
+    {"canonical": "Profile", "nativeType": "Profile Diagram", "family": "uml", "aliases": ["profile", "ProfileDiagram", "Profile Diagram"]},
+    {"canonical": "BDD", "nativeType": "SysML Block Definition Diagram", "family": "sysml", "aliases": ["bdd", "BlockDefinitionDiagram", "Block Definition Diagram", "SysML BDD", "SysML Block Definition Diagram"]},
+    {"canonical": "IBD", "nativeType": "SysML Internal Block Diagram", "family": "sysml", "aliases": ["ibd", "InternalBlockDiagram", "Internal Block Diagram", "SysML IBD", "SysML Internal Block Diagram"]},
+    {"canonical": "Requirement Diagram", "nativeType": "SysML Requirement Diagram", "family": "sysml", "aliases": ["requirement", "requirements", "RequirementDiagram", "Requirement Diagram", "SysML Requirement Diagram"]},
+    {"canonical": "Parametric Diagram", "nativeType": "SysML Parametric Diagram", "family": "sysml", "aliases": ["parametric", "ParametricDiagram", "Parametric Diagram", "SysML Parametric Diagram"]},
+]
+
+VALIDATED_MATRIX_KINDS: list[dict[str, Any]] = [
+    {
+        "kind": "refine",
+        "nativeType": "Refine Requirement Matrix",
+        "aliases": ["refine", "refine matrix", "refine requirement matrix"],
+        "validatedRowTypeExamples": ["Block", "UseCase", "Property"],
+        "validatedColumnTypeExamples": ["Requirement"],
+    },
+    {
+        "kind": "derive",
+        "nativeType": "Derive Requirement Matrix",
+        "aliases": ["derive", "derive matrix", "derive requirement matrix"],
+        "validatedRowTypeExamples": ["Requirement"],
+        "validatedColumnTypeExamples": ["Requirement"],
+    },
+]
+
+
+def _normalize_lookup_key(value: str) -> str:
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", value.strip())
+    spaced = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", spaced)
+    normalized = spaced.lower().replace("-", " ").replace("_", " ")
+    return " ".join(normalized.split())
+
+
+_DIAGRAM_TYPE_ALIASES: dict[str, str] = {}
+for _spec in VALIDATED_DIAGRAM_TYPES:
+    _DIAGRAM_TYPE_ALIASES[_normalize_lookup_key(_spec["canonical"])] = _spec["canonical"]
+    _DIAGRAM_TYPE_ALIASES[_normalize_lookup_key(_spec["nativeType"])] = _spec["canonical"]
+    for _alias in _spec["aliases"]:
+        _DIAGRAM_TYPE_ALIASES[_normalize_lookup_key(_alias)] = _spec["canonical"]
+
+
+_MATRIX_KIND_ALIASES: dict[str, str] = {}
+for _spec in VALIDATED_MATRIX_KINDS:
+    _MATRIX_KIND_ALIASES[_normalize_lookup_key(_spec["kind"])] = _spec["kind"]
+    _MATRIX_KIND_ALIASES[_normalize_lookup_key(_spec["nativeType"])] = _spec["kind"]
+    for _alias in _spec["aliases"]:
+        _MATRIX_KIND_ALIASES[_normalize_lookup_key(_alias)] = _spec["kind"]
+
+
+def normalize_diagram_type(diagram_type: str) -> str:
+    """Map user-facing aliases to the validated diagram token set."""
+    return _DIAGRAM_TYPE_ALIASES.get(_normalize_lookup_key(diagram_type), diagram_type.strip())
+
+
+def normalize_matrix_kind(kind: str) -> str:
+    """Map user-facing matrix aliases to the validated native kind set."""
+    return _MATRIX_KIND_ALIASES.get(_normalize_lookup_key(kind), kind.strip())
 
 
 def _base_url() -> str:
@@ -331,6 +404,12 @@ async def create_relationship(
     target_id: str,
     name: Optional[str] = None,
     guard: Optional[str] = None,
+    owner_id: Optional[str] = None,
+    source_part_with_port_id: Optional[str] = None,
+    target_part_with_port_id: Optional[str] = None,
+    realizing_connector_id: Optional[str] = None,
+    conveyed_ids: Optional[list[str]] = None,
+    item_property_id: Optional[str] = None,
 ) -> dict[str, Any]:
     """Create a relationship between two elements."""
     body: dict[str, Any] = {
@@ -342,7 +421,69 @@ async def create_relationship(
         body["name"] = name
     if guard is not None:
         body["guard"] = guard
+    if owner_id is not None:
+        body["ownerId"] = owner_id
+    if source_part_with_port_id is not None:
+        body["sourcePartWithPortId"] = source_part_with_port_id
+    if target_part_with_port_id is not None:
+        body["targetPartWithPortId"] = target_part_with_port_id
+    if realizing_connector_id is not None:
+        body["realizingConnectorId"] = realizing_connector_id
+    if conveyed_ids is not None:
+        body["conveyedIds"] = conveyed_ids
+    if item_property_id is not None:
+        body["itemPropertyId"] = item_property_id
     return await _request("POST", "/relationships", json_body=body)
+
+# -- Matrices -----------------------------------------------------------------
+
+
+async def list_matrices(
+    kind: Optional[str] = None,
+    owner_id: Optional[str] = None,
+) -> dict[str, Any]:
+    """List supported native requirement matrices in the current project."""
+    params: dict[str, Any] = {}
+    if kind is not None:
+        params["kind"] = kind
+    if owner_id is not None:
+        params["ownerId"] = owner_id
+    return await _request("GET", "/matrices", params=params)
+
+
+async def get_matrix(matrix_id: str) -> dict[str, Any]:
+    """Get one supported native requirement matrix with populated cell data."""
+    return await _request("GET", f"/matrices/{matrix_id}")
+
+
+async def create_matrix(
+    kind: str,
+    parent_id: str,
+    name: Optional[str] = None,
+    scope_id: Optional[str] = None,
+    row_scope_id: Optional[str] = None,
+    column_scope_id: Optional[str] = None,
+    row_types: Optional[list[str]] = None,
+    column_types: Optional[list[str]] = None,
+) -> dict[str, Any]:
+    """Create a native refine/derive requirement matrix."""
+    body: dict[str, Any] = {
+        "kind": normalize_matrix_kind(kind),
+        "parentId": parent_id,
+    }
+    if name is not None:
+        body["name"] = name
+    if scope_id is not None:
+        body["scopeId"] = scope_id
+    if row_scope_id is not None:
+        body["rowScopeId"] = row_scope_id
+    if column_scope_id is not None:
+        body["columnScopeId"] = column_scope_id
+    if row_types is not None:
+        body["rowTypes"] = row_types
+    if column_types is not None:
+        body["columnTypes"] = column_types
+    return await _request("POST", "/matrices", json_body=body)
 
 # -- Diagrams -----------------------------------------------------------------
 
@@ -359,7 +500,7 @@ async def create_diagram(
 ) -> dict[str, Any]:
     """Create a new diagram."""
     body: dict[str, Any] = {
-        "type": type,
+        "type": normalize_diagram_type(type),
         "name": name,
         "parentId": parent_id,
     }
@@ -377,13 +518,19 @@ async def add_to_diagram(
 ) -> dict[str, Any]:
     """Add a model element to a diagram canvas."""
     body: dict[str, Any] = {"elementId": element_id}
+    has_explicit_width = width is not None and width >= 0
+    has_explicit_height = height is not None and height >= 0
+    if has_explicit_width != has_explicit_height:
+        raise ValueError(
+            "width and height must both be non-negative, or both be omitted/negative"
+        )
     if x is not None:
         body["x"] = x
     if y is not None:
         body["y"] = y
-    if width is not None:
+    if has_explicit_width:
         body["width"] = width
-    if height is not None:
+    if has_explicit_height:
         body["height"] = height
     if container_presentation_id is not None:
         body["containerPresentationId"] = container_presentation_id

@@ -2,7 +2,7 @@
 
 An [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that connects AI coding assistants to **CATIA Magic / Cameo Systems Modeler** -- the industry-standard MBSE tool for SysML and UML modeling.
 
-This lets Claude Code (or any MCP-compatible client) **query, create, modify, and visualize** SysML/UML models inside a running Cameo instance through 37 tools covering capability negotiation, methodology-aware OOSEM workflows, elements, relationships, diagrams, specifications, and Groovy macro execution.
+This lets Claude Code (or any MCP-compatible client) **query, create, modify, and visualize** SysML/UML models inside a running Cameo instance through 49 tools covering capability negotiation, methodology-aware OOSEM workflows, elements, relationships, native requirement matrices, diagrams, reusable verification, specifications, and Groovy macro execution.
 
 ```
 Claude Code  <--stdio/MCP-->  Python MCP Server  <--HTTP/REST-->  Java Plugin (Cameo JVM)
@@ -47,6 +47,7 @@ This is the only open-source MCP server that integrates directly with a running 
                                                                |  - ElementQueryHandler  |
                                                                |  - ElementMutationHandler|
                                                                |  - RelationshipHandler  |
+                                                               |  - MatrixHandler        |
                                                                |  - DiagramHandler       |
                                                                |  - ContainmentTreeHandler|
                                                                |  - SpecificationHandler |
@@ -207,14 +208,17 @@ And set `CAMEO_BRIDGE_PORT=18741` in your environment before launching Claude Co
 |------|-------------|
 | `cameo_query_elements` | Search by type, name, package, stereotype, with paging and compact/full views |
 | `cameo_get_element` | Get full details of a single element |
-| `cameo_create_element` | Create a new model element (30+ types supported) |
+| `cameo_create_element` | Create a new model element |
 | `cameo_modify_element` | Change name or documentation |
 | `cameo_delete_element` | Remove an element and its children |
 | `cameo_get_containment_tree` | Browse the project hierarchy |
 | `cameo_list_containment_children` | Page/filter immediate children for large models with compact/full views |
 | `cameo_apply_profile` | Apply a profile to a model/package so custom stereotypes become usable |
 
-**Supported element types:** Package, Profile, Stereotype, Class, Block, Property, Port, Activity, StateMachine, Interaction, UseCase, Actor, Requirement, InterfaceBlock, ConstraintBlock, ValueType, DataType, Signal, Enumeration, Component, Comment, Constraint, CallBehaviorAction, OpaqueAction, ActivityPartition, InitialNode, ActivityFinalNode, FlowFinalNode, DecisionNode, MergeNode, ForkNode, JoinNode, InputPin, OutputPin, Operation
+**Supported element types:** Package, Profile, Stereotype, Class, Block, Property, FlowProperty, Port, Interface, Activity, UseCase, Actor, StateMachine, State, Pseudostate, InitialState, Requirement, InterfaceBlock, ConstraintBlock, ValueType, DataType, Signal, Enumeration, Component, Comment, Constraint, CallBehaviorAction, OpaqueAction, ActivityPartition, InitialNode, ActivityFinalNode, FlowFinalNode, DecisionNode, MergeNode, ForkNode, JoinNode, InputPin, OutputPin, Operation
+
+SysML aliases such as `Block`, `Requirement`, `ConstraintBlock`, `InterfaceBlock`, `ValueType`, and `FlowProperty` rely on the SysML profile being available. The bridge now treats missing required stereotypes as an error instead of silently producing plain UML elements.
+`Pseudostate` currently maps to an initial pseudostate in the MVP.
 
 For large projects, prefer `cameo_list_containment_children` over `cameo_get_containment_tree`. The recursive tree endpoint is still available for compatibility, but it can produce very large responses on real models.
 
@@ -239,31 +243,69 @@ If you create a custom profile through MCP, the typical sequence is:
 | `cameo_create_relationship` | Create a relationship between two elements |
 | `cameo_get_relationships` | Query relationships for an element |
 
-**Supported relationship types:** Association, DirectedAssociation, Composition, Generalization, Dependency, ControlFlow, ObjectFlow, Allocate, Satisfy, Derive, Refine, Trace, Include, Extend
+**Supported relationship types:** Association, DirectedAssociation, Composition, Generalization, Dependency, ControlFlow, ObjectFlow, Transition, Connector, InformationFlow, ItemFlow, Allocate, Satisfy, Derive, Refine, Trace, Verify, Include, Extend
 
-### Diagrams (10 tools)
+`Connector` supports nested-port `partWithPort` ownership. `InformationFlow` and `ItemFlow` support structured `realizingConnector`, `conveyed`, and SysML `itemProperty` payload data for IBD item-flow workflows. When you pass an IBD context element as `ownerId`, the bridge resolves the actual `InformationFlow`/`ItemFlow` containment to the nearest package because Cameo does not allow those relationships to be owned directly by a block.
+
+### Matrices (4 tools)
 
 | Tool | Description |
 |------|-------------|
+| `cameo_list_matrix_kinds` | List validated native matrix kinds, aliases, and example type domains |
+| `cameo_list_matrices` | List supported native requirement matrices in the project |
+| `cameo_get_matrix` | Read one native refine/derive matrix with rows, columns, and populated cells |
+| `cameo_create_matrix` | Create a native refine or derive requirement matrix artifact |
+
+**Supported matrix kinds:** `refine`, `derive`
+
+These tools target Cameo's native matrix artifacts:
+- `refine` -> `Refine Requirement Matrix`
+- `derive` -> `Derive Requirement Matrix`
+
+This matrix family is separate from the diagram shape/path API. It manages native requirement-matrix artifacts and returns row/column/cell data directly.
+
+`cameo_create_matrix` also accepts optional `row_types` and `column_types` lists so native refine matrices can target mission artifacts such as `UseCase`, `Property`, or SysML stereotypes instead of being fixed to `Block`. Use `cameo_list_matrix_kinds` to see the validated kind aliases and example type domains.
+
+### Diagrams (15 tools)
+
+| Tool | Description |
+|------|-------------|
+| `cameo_list_diagram_types` | List validated diagram request tokens, aliases, and native Cameo types |
 | `cameo_list_diagrams` | List all diagrams in the project |
 | `cameo_create_diagram` | Create a new diagram (18 types supported) |
 | `cameo_add_to_diagram` | Place a model element on a diagram canvas and return its `presentationId` |
 | `cameo_get_diagram_image` | Export a diagram as base64-encoded PNG |
 | `cameo_auto_layout` | Apply Cameo's built-in auto-layout |
 | `cameo_list_diagram_shapes` | List all shapes/paths with presentation IDs, bounds, and counts |
+| `cameo_get_shape_properties` | Read the current display properties of one diagram shape |
 | `cameo_move_shapes` | Reposition/resize shapes on a diagram with per-item results |
 | `cameo_delete_shapes` | Remove shapes from a diagram (model elements preserved) |
 | `cameo_add_diagram_paths` | Draw relationship paths between shapes on a diagram |
 | `cameo_set_shape_properties` | Set display properties (colors, compartment visibility, etc.) with receipts |
+| `cameo_set_shape_compartments` | Apply normalized compartment visibility controls to one shape |
+| `cameo_reparent_shapes` | Move existing presentation elements under new container shapes |
+| `cameo_route_paths` | Update path breakpoints, endpoints, and label reset behavior |
 
-**Supported diagram types:** Class, Package, UseCase, Activity, Sequence, StateMachine, Component, Deployment, CompositeStructure, Object, Communication, InteractionOverview, Timing, Profile, SysML BDD, SysML IBD, SysML Requirement, SysML Parametric
+**Validated diagram request tokens:** `Class`, `Package`, `UseCase`, `Activity`, `Sequence`, `StateMachine`, `Component`, `Deployment`, `CompositeStructure`, `Object`, `Communication`, `InteractionOverview`, `Timing`, `Profile`, `BDD`, `IBD`, `Requirement Diagram`, `Parametric Diagram`
 
-### Specification (2 tools)
+Use `cameo_list_diagram_types` if you want the accepted aliases too. Common forms such as `InternalBlockDiagram`, `SysML IBD`, `ClassDiagram`, and `StateMachineDiagram` are normalized to the validated token set automatically.
+
+### Verification (2 tools)
+
+| Tool | Description |
+|------|-------------|
+| `cameo_verify_matrix_consistency` | Check matrix row/column membership, populated-cell count, dependency names, and density |
+| `cameo_verify_diagram_visual` | Check rendered PNG validity, diagram/path presence, content coverage, and coarse overlap risk |
+
+These verification tools are Python-side wrappers over the bridge's native diagram and matrix readback. They are intended for repeatable regression checks, visual sanity validation, and lightweight quantitative validation without dropping to raw macros.
+
+### Specification (3 tools)
 
 | Tool | Description |
 |------|-------------|
 | `cameo_get_specification` | Read all UML properties, tagged values, and constraints |
 | `cameo_set_specification` | Write properties, tagged values, or constraint fields |
+| `cameo_set_usecase_subject` | Set or clear the UML subject classifier for a use case |
 
 ### Macros (1 tool)
 
@@ -302,12 +344,13 @@ The AI will:
 1. Call `cameo_get_project` to find the root model ID
 2. Call `cameo_create_element` with type "Block", name "Sensor", and the root model ID as parent
 
-### Build a State Machine
+### Build A State Machine
 
 ```
-Create a state machine for an ATM with states: OFF, IDLE, ACTIVE, MAINTENANCE.
-Add transitions: OFF->IDLE on startup, IDLE->ACTIVE on card insert,
-ACTIVE->IDLE when transaction complete, any state->MAINTENANCE on service request.
+Create a state machine for an ATM with states OFF, IDLE, ACTIVE, and MAINTENANCE.
+Add an initial pseudostate and transitions: initial -> OFF, OFF -> IDLE on startup,
+IDLE -> ACTIVE on card insert, ACTIVE -> IDLE on transaction complete, and any state
+-> MAINTENANCE on service request.
 ```
 
 ### Query and Modify
@@ -334,7 +377,7 @@ Run a macro that lists all profiles loaded in the current project
 
 The bridge builds models correctly -- elements, relationships, directionality, stereotypes, and structure all come out right. The main gap is **diagram presentation**: layout, spacing, and visual properties of complex diagrams often need manual adjustment in Cameo's GUI.
 
-**Root cause:** `cameo_list_diagram_shapes` and `cameo_move_shapes` only operate on **top-level** presentation elements. Shapes nested inside composite states, swimlanes, combined fragments, or interaction uses are invisible to the bridge. This means:
+`cameo_list_diagram_shapes` now discovers nested presentation elements recursively, but complex nested editing is still incomplete. Sequence diagrams, composite states, and other deeply nested presentations can still require manual cleanup or Groovy fallbacks. This means:
 
 | What Doesn't Work | Why |
 |---|---|
@@ -351,16 +394,16 @@ The bridge builds models correctly -- elements, relationships, directionality, s
 - For sequence diagrams: the model is correct, so manual drag-and-drop in Cameo takes 5-10 minutes
 - For state machines: widen shapes and toggle region name visibility manually
 
-**Planned fix:** Make shape listing and manipulation recursive so nested presentation elements are accessible.
+**Current direction:** Keep expanding structured editing for nested presentation elements so fewer workflows require macros.
 
 ### Not Yet Implemented
+- **Generic matrix/table artifact handler** -- native matrix support currently covers refine/derive requirement matrices only
 - **Remove stereotype** -- can apply but not remove
 - **Delete/rename diagrams** -- diagrams can be created and populated but not deleted or renamed through the bridge
 - **Element reparenting** -- cannot move elements between packages
 - **Undo/redo** -- sessions support undo in Cameo's UI, but no MCP tool to trigger it
 - **Bulk operations** -- creating N elements requires N sequential API calls
 - **Model change notifications** -- purely request/response; no event subscription
-- **Verify relationship** -- `allocate`, `satisfy`, `derive`, `refine`, `trace` are supported, but `verify` is missing
 - **File-based diagram export** -- `cameo_get_diagram_image` returns base64 over the wire; no option to save directly to a file path (use `cameo_execute_macro` with `ImageExporter.export(dpe, ImageExporter.PNG, file)` as a workaround)
 
 ### API Gaps
@@ -394,7 +437,8 @@ cameo-mcp-bridge/
     cameo_mcp/
       __init__.py
       client.py                        # HTTP client for the Java plugin
-      server.py                        # MCP tool definitions (37 tools)
+      server.py                        # MCP tool definitions (49 tools)
+      verification.py                  # reusable diagram/matrix verification helpers
       methodology/                     # Phase 2 pack registry + recipe runtime
         registry.py
         runtime.py
@@ -409,6 +453,7 @@ cameo-mcp-bridge/
         ElementQueryHandler.java       # Element search, get, relationships
         ElementMutationHandler.java    # Create, modify, delete elements
         RelationshipHandler.java       # Create relationships
+        MatrixHandler.java             # Native refine/derive requirement matrices
         DiagramHandler.java            # Full diagram lifecycle
         ContainmentTreeHandler.java    # Containment tree browsing
         SpecificationHandler.java      # Specification read/write

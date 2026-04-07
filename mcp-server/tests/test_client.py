@@ -135,3 +135,227 @@ class ClientRequestTests(unittest.IsolatedAsyncioTestCase):
             },
             request.await_args.kwargs["params"],
         )
+
+    async def test_add_to_diagram_omits_negative_auto_size_dimensions(self) -> None:
+        with patch("cameo_mcp.client._request", new=AsyncMock(return_value={"added": True})) as request:
+            await client.add_to_diagram(
+                diagram_id="dia-1",
+                element_id="el-1",
+                x=120,
+                y=220,
+                width=-1,
+                height=-1,
+            )
+
+        request.assert_awaited_once()
+        self.assertEqual(
+            {"elementId": "el-1", "x": 120, "y": 220},
+            request.await_args.kwargs["json_body"],
+        )
+
+    async def test_add_to_diagram_keeps_explicit_dimensions(self) -> None:
+        with patch("cameo_mcp.client._request", new=AsyncMock(return_value={"added": True})) as request:
+            await client.add_to_diagram(
+                diagram_id="dia-1",
+                element_id="el-1",
+                width=320,
+                height=180,
+            )
+
+        request.assert_awaited_once()
+        self.assertEqual(
+            {"elementId": "el-1", "width": 320, "height": 180},
+            request.await_args.kwargs["json_body"],
+        )
+
+    async def test_add_to_diagram_rejects_mixed_explicit_and_auto_size_dimensions(self) -> None:
+        with self.assertRaisesRegex(ValueError, "width and height must both be non-negative"):
+            await client.add_to_diagram(
+                diagram_id="dia-1",
+                element_id="el-1",
+                width=-1,
+                height=180,
+            )
+
+    async def test_create_relationship_omits_optional_connector_fields_when_absent(self) -> None:
+        with patch("cameo_mcp.client._request", new=AsyncMock(return_value={"created": True})) as request:
+            await client.create_relationship(
+                type="Transition",
+                source_id="src-1",
+                target_id="tgt-1",
+            )
+
+        request.assert_awaited_once()
+        self.assertEqual(
+            {"type": "Transition", "sourceId": "src-1", "targetId": "tgt-1"},
+            request.await_args.kwargs["json_body"],
+        )
+
+    async def test_create_relationship_includes_connector_fields(self) -> None:
+        with patch("cameo_mcp.client._request", new=AsyncMock(return_value={"created": True})) as request:
+            await client.create_relationship(
+                type="Connector",
+                source_id="port-a",
+                target_id="port-b",
+                owner_id="block-1",
+                source_part_with_port_id="part-a",
+                target_part_with_port_id="part-b",
+            )
+
+        request.assert_awaited_once()
+        self.assertEqual(
+            {
+                "type": "Connector",
+                "sourceId": "port-a",
+                "targetId": "port-b",
+                "ownerId": "block-1",
+                "sourcePartWithPortId": "part-a",
+                "targetPartWithPortId": "part-b",
+            },
+            request.await_args.kwargs["json_body"],
+        )
+
+    async def test_create_relationship_includes_information_flow_fields(self) -> None:
+        with patch("cameo_mcp.client._request", new=AsyncMock(return_value={"created": True})) as request:
+            await client.create_relationship(
+                type="ItemFlow",
+                source_id="port-a",
+                target_id="port-b",
+                owner_id="system-block",
+                realizing_connector_id="connector-1",
+                conveyed_ids=["io-block"],
+                item_property_id="flow-prop-1",
+            )
+
+        request.assert_awaited_once()
+        self.assertEqual(
+            {
+                "type": "ItemFlow",
+                "sourceId": "port-a",
+                "targetId": "port-b",
+                "ownerId": "system-block",
+                "realizingConnectorId": "connector-1",
+                "conveyedIds": ["io-block"],
+                "itemPropertyId": "flow-prop-1",
+            },
+            request.await_args.kwargs["json_body"],
+        )
+
+    async def test_list_matrices_passes_filters(self) -> None:
+        with patch("cameo_mcp.client._request", new=AsyncMock(return_value={"count": 0})) as request:
+            await client.list_matrices(
+                kind="refine",
+                owner_id="pkg-1",
+            )
+
+        request.assert_awaited_once()
+        self.assertEqual("GET", request.await_args.args[0])
+        self.assertEqual("/matrices", request.await_args.args[1])
+        self.assertEqual(
+            {
+                "kind": "refine",
+                "ownerId": "pkg-1",
+            },
+            request.await_args.kwargs["params"],
+        )
+
+    async def test_get_matrix_uses_matrix_endpoint(self) -> None:
+        with patch("cameo_mcp.client._request", new=AsyncMock(return_value={"id": "matrix-1"})) as request:
+            await client.get_matrix("matrix-1")
+
+        request.assert_awaited_once_with("GET", "/matrices/matrix-1")
+
+    async def test_create_matrix_includes_scopes(self) -> None:
+        with patch("cameo_mcp.client._request", new=AsyncMock(return_value={"created": True})) as request:
+            await client.create_matrix(
+                kind="derive",
+                parent_id="pkg-1",
+                name="Derive Coverage",
+                scope_id="pkg-2",
+                row_scope_id="pkg-3",
+                column_scope_id="pkg-4",
+            )
+
+        request.assert_awaited_once()
+        self.assertEqual("POST", request.await_args.args[0])
+        self.assertEqual("/matrices", request.await_args.args[1])
+        self.assertEqual(
+            {
+                "kind": "derive",
+                "parentId": "pkg-1",
+                "name": "Derive Coverage",
+                "scopeId": "pkg-2",
+                "rowScopeId": "pkg-3",
+                "columnScopeId": "pkg-4",
+            },
+            request.await_args.kwargs["json_body"],
+        )
+
+    async def test_create_matrix_includes_type_domains(self) -> None:
+        with patch("cameo_mcp.client._request", new=AsyncMock(return_value={"created": True})) as request:
+            await client.create_matrix(
+                kind="refine",
+                parent_id="pkg-1",
+                row_types=["UseCase", "Property"],
+                column_types=["Requirement"],
+            )
+
+        request.assert_awaited_once()
+        self.assertEqual(
+            {
+                "kind": "refine",
+                "parentId": "pkg-1",
+                "rowTypes": ["UseCase", "Property"],
+                "columnTypes": ["Requirement"],
+            },
+            request.await_args.kwargs["json_body"],
+        )
+
+    async def test_create_matrix_normalizes_kind_aliases(self) -> None:
+        with patch("cameo_mcp.client._request", new=AsyncMock(return_value={"created": True})) as request:
+            await client.create_matrix(
+                kind="Refine Requirement Matrix",
+                parent_id="pkg-1",
+            )
+
+        self.assertEqual(
+            {
+                "kind": "refine",
+                "parentId": "pkg-1",
+            },
+            request.await_args.kwargs["json_body"],
+        )
+
+    async def test_create_diagram_normalizes_internal_block_alias(self) -> None:
+        with patch("cameo_mcp.client._request", new=AsyncMock(return_value={"id": "dia-1"})) as request:
+            await client.create_diagram(
+                type="InternalBlockDiagram",
+                name="Context",
+                parent_id="block-1",
+            )
+
+        self.assertEqual(
+            {
+                "type": "IBD",
+                "name": "Context",
+                "parentId": "block-1",
+            },
+            request.await_args.kwargs["json_body"],
+        )
+
+    async def test_create_diagram_normalizes_sysml_ibd_alias(self) -> None:
+        with patch("cameo_mcp.client._request", new=AsyncMock(return_value={"id": "dia-1"})) as request:
+            await client.create_diagram(
+                type="SysML IBD",
+                name="Context",
+                parent_id="block-1",
+            )
+
+        self.assertEqual(
+            {
+                "type": "IBD",
+                "name": "Context",
+                "parentId": "block-1",
+            },
+            request.await_args.kwargs["json_body"],
+        )

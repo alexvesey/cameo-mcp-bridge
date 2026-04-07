@@ -6,6 +6,11 @@ import com.claude.cameo.bridge.util.ElementSerializer;
 import com.claude.cameo.bridge.util.JsonHelper;
 import com.nomagic.magicdraw.uml.ClassTypes;
 import com.nomagic.magicdraw.uml.Finder;
+import com.nomagic.magicdraw.uml2.Connectors;
+import com.nomagic.uml2.ext.magicdraw.auxiliaryconstructs.mdinformationflows.InformationFlow;
+import com.nomagic.uml2.ext.magicdraw.compositestructures.mdinternalstructures.ConnectableElement;
+import com.nomagic.uml2.ext.magicdraw.compositestructures.mdinternalstructures.Connector;
+import com.nomagic.uml2.ext.magicdraw.compositestructures.mdinternalstructures.ConnectorEnd;
 import com.nomagic.uml2.ext.magicdraw.classes.mdkernel.DirectedRelationship;
 import com.nomagic.uml2.ext.magicdraw.classes.mdkernel.Element;
 import com.nomagic.uml2.ext.magicdraw.classes.mdkernel.NamedElement;
@@ -279,6 +284,20 @@ public class ElementQueryHandler implements HttpHandler {
                 LOG.log(Level.FINE, "Error reading undirected relationships", e);
             }
 
+            try {
+                if (element instanceof ConnectableElement) {
+                    Collection<Connector> connectors =
+                            Connectors.collectDirectConnectors((ConnectableElement) element);
+                    if (connectors != null) {
+                        for (Connector connector : connectors) {
+                            undirected.add(serializeConnector(connector, elementId));
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                LOG.log(Level.FINE, "Error reading connectors", e);
+            }
+
             JsonObject response = new JsonObject();
             response.addProperty("elementId", elementId);
             response.add("outgoing", outgoing);
@@ -355,43 +374,15 @@ public class ElementQueryHandler implements HttpHandler {
         } catch (Exception e) {
             json.addProperty("type", rel.getHumanType());
         }
+        json.addProperty("humanType", rel.getHumanType());
+        appendRelationshipMetadata(json, rel);
 
-        if (rel instanceof NamedElement) {
-            String name = ((NamedElement) rel).getName();
-            if (name != null && !name.isEmpty()) {
-                json.addProperty("name", name);
-            }
-        }
+        json.add("sources", serializeElementsSafe(rel.getSource(), "relationship sources"));
+        json.add("targets", serializeElementsSafe(rel.getTarget(), "relationship targets"));
 
-        JsonArray sources = new JsonArray();
-        try {
-            for (Element src : rel.getSource()) {
-                JsonObject srcJson = new JsonObject();
-                srcJson.addProperty("id", src.getID());
-                if (src instanceof NamedElement) {
-                    srcJson.addProperty("name", ((NamedElement) src).getName());
-                }
-                sources.add(srcJson);
-            }
-        } catch (Exception e) {
-            LOG.log(Level.FINE, "Error reading relationship sources", e);
+        if (rel instanceof InformationFlow) {
+            appendInformationFlowFields(json, (InformationFlow) rel);
         }
-        json.add("sources", sources);
-
-        JsonArray targets = new JsonArray();
-        try {
-            for (Element tgt : rel.getTarget()) {
-                JsonObject tgtJson = new JsonObject();
-                tgtJson.addProperty("id", tgt.getID());
-                if (tgt instanceof NamedElement) {
-                    tgtJson.addProperty("name", ((NamedElement) tgt).getName());
-                }
-                targets.add(tgtJson);
-            }
-        } catch (Exception e) {
-            LOG.log(Level.FINE, "Error reading relationship targets", e);
-        }
-        json.add("targets", targets);
 
         return json;
     }
@@ -432,6 +423,114 @@ public class ElementQueryHandler implements HttpHandler {
         }
         json.add("relatedElements", relatedElements);
 
+        return json;
+    }
+
+    private void appendRelationshipMetadata(JsonObject json, Element relationship) {
+        if (relationship instanceof NamedElement) {
+            String name = ((NamedElement) relationship).getName();
+            if (name != null && !name.isEmpty()) {
+                json.addProperty("name", name);
+            }
+        }
+        Element owner = relationship.getOwner();
+        if (owner != null) {
+            json.addProperty("ownerId", owner.getID());
+        }
+        try {
+            List<Stereotype> stereotypes = StereotypesHelper.getStereotypes(relationship);
+            if (stereotypes != null && !stereotypes.isEmpty()) {
+                JsonArray stereotypeNames = new JsonArray();
+                for (Stereotype stereotype : stereotypes) {
+                    stereotypeNames.add(stereotype.getName());
+                }
+                json.add("stereotypes", stereotypeNames);
+            }
+        } catch (Exception e) {
+            LOG.log(Level.FINE, "Error reading relationship stereotypes", e);
+        }
+    }
+
+    private void appendInformationFlowFields(JsonObject json, InformationFlow informationFlow) {
+        json.add(
+                "conveyed",
+                serializeElementsSafe(informationFlow.getConveyed(), "information flow conveyed"));
+        json.add(
+                "realizingConnectors",
+                serializeElementsSafe(
+                        informationFlow.getRealizingConnector(),
+                        "information flow realizing connectors"));
+        try {
+            Stereotype itemFlow = StereotypesHelper.getAppliedStereotypeByString(
+                    informationFlow,
+                    "ItemFlow");
+            if (itemFlow != null) {
+                Object itemProperty = StereotypesHelper.getStereotypePropertyFirst(
+                        informationFlow,
+                        itemFlow,
+                        "itemProperty");
+                if (itemProperty instanceof Element) {
+                    json.add("itemProperty", ElementSerializer.toJsonCompact((Element) itemProperty));
+                }
+            }
+        } catch (Exception e) {
+            LOG.log(Level.FINE, "Error reading information flow itemProperty", e);
+        }
+    }
+
+    private JsonArray serializeElementsSafe(
+            Collection<? extends Element> elements,
+            String label) {
+        JsonArray serialized = new JsonArray();
+        try {
+            if (elements == null) {
+                return serialized;
+            }
+            for (Element element : elements) {
+                if (element != null) {
+                    serialized.add(ElementSerializer.toJsonCompact(element));
+                }
+            }
+        } catch (Exception e) {
+            LOG.log(Level.FINE, "Error reading " + label, e);
+        }
+        return serialized;
+    }
+
+    private JsonObject serializeConnector(Connector connector, String selfId) {
+        JsonObject json = new JsonObject();
+        json.addProperty("relationshipId", connector.getID());
+        json.addProperty("direction", "undirected");
+        json.addProperty("type", "Connector");
+
+        if (connector instanceof NamedElement) {
+            String name = ((NamedElement) connector).getName();
+            if (name != null && !name.isEmpty()) {
+                json.addProperty("name", name);
+            }
+        }
+
+        JsonArray relatedElements = new JsonArray();
+        try {
+            Collection<ConnectorEnd> ends = connector.getEnd();
+            if (ends != null) {
+                for (ConnectorEnd end : ends) {
+                    ConnectableElement role = end.getRole();
+                    if (role == null || selfId.equals(role.getID())) {
+                        continue;
+                    }
+                    JsonObject relJson = new JsonObject();
+                    relJson.addProperty("id", role.getID());
+                    if (role instanceof NamedElement) {
+                        relJson.addProperty("name", ((NamedElement) role).getName());
+                    }
+                    relatedElements.add(relJson);
+                }
+            }
+        } catch (Exception e) {
+            LOG.log(Level.FINE, "Error reading connector ends", e);
+        }
+        json.add("relatedElements", relatedElements);
         return json;
     }
 
