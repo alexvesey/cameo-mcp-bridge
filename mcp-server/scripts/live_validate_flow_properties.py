@@ -185,7 +185,7 @@ return "ok"
 
 async def run_validation(keep_artifacts: bool) -> dict[str, Any]:
     report: dict[str, Any] = {
-        "runId": f"live-assignment-10a-{int(time.time())}",
+        "runId": f"live-flow-properties-{int(time.time())}",
         "checks": [],
         "artifacts": {},
         "cleanup": {
@@ -246,13 +246,13 @@ async def run_validation(keep_artifacts: bool) -> dict[str, Any]:
             },
         )
 
-        prefix = f"MCP Assignment 10A Validation {int(time.time())}"
+        prefix = f"MCP Flow Property Validation {int(time.time())}"
         validation_package = await _create_element(
             "Package",
             prefix,
             root_id,
             report,
-            documentation="Disposable package for Assignment 10A live validation.",
+            documentation="Disposable package for flow property live validation.",
         )
         validation_package_id = validation_package["id"]
         _append_check(
@@ -332,7 +332,7 @@ async def run_validation(keep_artifacts: bool) -> dict[str, Any]:
         )
         _append_check(
             report,
-            "hw-10-3-flow-property-path",
+            "flow-property-path",
             True,
             flow_property_probe,
         )
@@ -439,7 +439,7 @@ async def run_validation(keep_artifacts: bool) -> dict[str, Any]:
         )
         _append_check(
             report,
-            "hw-10-4-item-flow-model-path",
+            "item-flow-model-path",
             True,
             {
                 "elementReadback": item_flow_element,
@@ -473,7 +473,7 @@ async def run_validation(keep_artifacts: bool) -> dict[str, Any]:
         )
         _append_check(
             report,
-            "hw-10-4-item-flow-query-path",
+            "item-flow-query-path",
             True,
             outgoing_item_flow,
         )
@@ -537,7 +537,7 @@ async def run_validation(keep_artifacts: bool) -> dict[str, Any]:
         )
         _append_check(
             report,
-            "hw-10-4-ibd-path-placement",
+            "ibd-path-placement",
             True,
             {
                 "diagram": ibd,
@@ -572,7 +572,7 @@ async def run_validation(keep_artifacts: bool) -> dict[str, Any]:
         )
         _append_check(
             report,
-            "hw-10-4-visual-verification",
+            "ibd-visual-verification",
             True,
             {
                 "diagramId": diagram_id,
@@ -611,7 +611,7 @@ async def run_validation(keep_artifacts: bool) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Run live validation for the remaining Assignment 10A bridge workflows.",
+        description="Run live validation for flow property and item flow bridge workflows.",
     )
     parser.add_argument(
         "--keep-artifacts",
