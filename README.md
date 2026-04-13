@@ -187,14 +187,17 @@ The Java plugin reads the port from system property `cameo.mcp.port` (default `1
 
 And set `CAMEO_BRIDGE_PORT=18741` in your environment before launching Claude Code.
 
+For local health checks, the plugin now responds on both `/api/v1/status` and the legacy `/status` alias. The same applies to `/api/v1/capabilities` and `/capabilities`.
+
 ## Tool Reference
 
-### Project & Session (5 tools)
+### Project & Session (6 tools)
 
 | Tool | Description |
 |------|-------------|
 | `cameo_status` | Check plugin health and report client/plugin compatibility |
 | `cameo_get_capabilities` | Get machine-readable endpoint/capability metadata |
+| `cameo_probe_bridge` | Probe `/status` and `/api/v1/status` style endpoints and report the preferred local health paths |
 | `cameo_get_project` | Get project name, file path, and root model ID |
 | `cameo_save_project` | Save the project to disk |
 | `cameo_reset_session` | Force-close a stuck editing session (recovery tool) |
@@ -274,7 +277,7 @@ This matrix family is separate from the diagram shape/path API. It manages nativ
 
 `cameo_create_matrix` also accepts optional `row_types` and `column_types` lists so native refine matrices can target mission artifacts such as `UseCase`, `Property`, or SysML stereotypes instead of being fixed to `Block`. Use `cameo_list_matrix_kinds` to see the validated kind aliases and example type domains.
 
-### Diagrams (15 tools)
+### Diagrams (22 tools)
 
 | Tool | Description |
 |------|-------------|
@@ -291,6 +294,13 @@ This matrix family is separate from the diagram shape/path API. It manages nativ
 | `cameo_add_diagram_paths` | Draw relationship paths between shapes on a diagram |
 | `cameo_set_shape_properties` | Set display properties (colors, compartment visibility, etc.) with receipts |
 | `cameo_set_shape_compartments` | Apply normalized compartment visibility controls to one shape |
+| `cameo_set_transition_label_presentation` | Apply a high-level state-transition label preset instead of guessing raw Cameo property names |
+| `cameo_set_item_flow_label_presentation` | Apply a high-level item-flow/information-flow label preset for IBD cleanup |
+| `cameo_set_allocation_compartment_presentation` | Apply a high-level allocation/full-port presentation preset for SysML BDD cleanup |
+| `cameo_repair_hidden_labels` | Auto-show hidden labels using diagram-type-aware native repair defaults |
+| `cameo_repair_label_positions` | Reset likely-overlapping path labels with dry-run receipts |
+| `cameo_repair_conveyed_item_labels` | Force conveyed-item/item-flow labels on eligible paths |
+| `cameo_normalize_compartment_presets` | Normalize compartment/full-port visibility by diagram type |
 | `cameo_reparent_shapes` | Move existing presentation elements under new container shapes |
 | `cameo_route_paths` | Update path breakpoints, endpoints, and label reset behavior |
 
@@ -317,6 +327,35 @@ These verification tools are Python-side wrappers over the bridge's native diagr
 | `cameo_verify_cross_diagram_traceability` | Compare activity, interface, IBD, and requirements-to-architecture vocabulary/trace coverage |
 
 These tools are the semantics-first layer for MBSE review. They use bridge readback plus lightweight Python heuristics to catch the common failure mode where a diagram looks plausible but does not hold together as a reviewable model.
+
+### Auto Remediation (2 tools)
+
+| Tool | Description |
+|------|-------------|
+| `cameo_detect_cross_diagram_inconsistencies` | Run semantic checks and return previewable remediation receipts plus a `patchPlan` |
+| `cameo_build_cross_diagram_remediation_plan` | Turn existing validation payloads into a non-mutating remediation plan |
+
+These tools do not mutate the model. They exist to bridge the gap between validation and safe repair by returning structured preview steps that later apply flows can consume.
+
+### Proofing (2 tools)
+
+| Tool | Description |
+|------|-------------|
+| `cameo_proof_model_text` | Collect and proof requirements, comments, state/transition names, and diagram labels, with optional safe auto-apply |
+| `cameo_apply_proofing_patch_plan` | Apply a previously generated proofing patch plan to the live model |
+
+Proofing is intentionally scoped to high-confidence name/text fixes. The proof report includes findings, metrics, sections, and a preview patch plan even when `auto_apply` is off.
+
+### Rubric Workflows (4 tools)
+
+| Tool | Description |
+|------|-------------|
+| `cameo_compare_expected_artifact_list` | Diff current artifacts against an expected rubric artifact list and return preview actions |
+| `cameo_validate_assignment_package` | Validate a pack/recipe/package scope against the methodology rubric |
+| `cameo_export_required_diagrams` | Plan or execute export of the rubric-required diagram set |
+| `cameo_assemble_ppt_pdf` | Plan or assemble PPT/PDF review packages from the exported diagram set |
+
+For PPTX assembly, install the Python dependencies from `mcp-server/pyproject.toml` so `python-pptx` is available in the MCP runtime environment.
 
 ### State Machine Semantics (4 tools)
 

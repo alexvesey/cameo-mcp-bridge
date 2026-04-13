@@ -15,9 +15,11 @@ public final class BridgeCapabilities {
 
     public static final String PLUGIN_ID = "com.claude.cameo.bridge";
     public static final String PLUGIN_NAME = "Cameo MCP Bridge";
-    public static final String PLUGIN_VERSION = "2.1.0";
+    public static final String PLUGIN_VERSION = "2.3.0";
     public static final String API_VERSION = "v1";
     public static final String HANDSHAKE_VERSION = "1";
+    public static final String LEGACY_STATUS_PATH = "/status";
+    public static final String LEGACY_CAPABILITIES_PATH = "/capabilities";
     public static final String STATUS_PATH = "/api/v1/status";
     public static final String CAPABILITIES_PATH = "/api/v1/capabilities";
 
@@ -56,6 +58,13 @@ public final class BridgeCapabilities {
             new Capability("diagrams", "cameo_add_diagram_paths", "POST", "/api/v1/diagrams/{diagramId}/paths", "write"),
             new Capability("diagrams", "cameo_set_shape_properties", "PUT", "/api/v1/diagrams/{diagramId}/shapes/{presentationId}/properties", "write"),
             new Capability("diagrams", "cameo_set_shape_compartments", "PUT", "/api/v1/diagrams/{diagramId}/shapes/{presentationId}/compartments", "write"),
+            new Capability("diagrams", "cameo_set_transition_label_presentation", "PUT", "/api/v1/diagrams/{diagramId}/presentation/transition-labels", "write"),
+            new Capability("diagrams", "cameo_set_item_flow_label_presentation", "PUT", "/api/v1/diagrams/{diagramId}/presentation/item-flow-labels", "write"),
+            new Capability("diagrams", "cameo_set_allocation_compartment_presentation", "PUT", "/api/v1/diagrams/{diagramId}/presentation/allocation-compartments", "write"),
+            new Capability("diagrams", "cameo_repair_hidden_labels", "PUT", "/api/v1/diagrams/{diagramId}/repair/hidden-labels", "write"),
+            new Capability("diagrams", "cameo_repair_label_positions", "PUT", "/api/v1/diagrams/{diagramId}/repair/label-positions", "write"),
+            new Capability("diagrams", "cameo_repair_conveyed_item_labels", "PUT", "/api/v1/diagrams/{diagramId}/repair/conveyed-item-labels", "write"),
+            new Capability("diagrams", "cameo_normalize_compartment_presets", "PUT", "/api/v1/diagrams/{diagramId}/repair/compartment-presets", "write"),
             new Capability("diagrams", "cameo_reparent_shapes", "PUT", "/api/v1/diagrams/{diagramId}/shapes/reparent", "write"),
             new Capability("diagrams", "cameo_route_paths", "PUT", "/api/v1/diagrams/{diagramId}/paths/route", "write"),
             new Capability("specification", "cameo_get_specification", "GET", "/api/v1/elements/{elementId}/specification", "read"),
@@ -94,7 +103,15 @@ public final class BridgeCapabilities {
         json.addProperty("handshakeVersion", HANDSHAKE_VERSION);
         json.addProperty("port", port);
         json.addProperty("statusEndpoint", STATUS_PATH);
+        JsonArray statusAliases = new JsonArray();
+        statusAliases.add(LEGACY_STATUS_PATH);
+        statusAliases.add(STATUS_PATH);
+        json.add("statusAliases", statusAliases);
         json.addProperty("capabilitiesEndpoint", CAPABILITIES_PATH);
+        JsonArray capabilityAliases = new JsonArray();
+        capabilityAliases.add(LEGACY_CAPABILITIES_PATH);
+        capabilityAliases.add(CAPABILITIES_PATH);
+        json.add("capabilitiesAliases", capabilityAliases);
         json.add("compatibility", buildCompatibility());
         json.add("capabilities", buildCapabilityManifest());
         return json;

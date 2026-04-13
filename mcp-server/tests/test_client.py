@@ -1,5 +1,10 @@
+import base64
 import unittest
+from io import BytesIO
+from typing import Any
 from unittest.mock import AsyncMock, patch
+
+from PIL import Image
 
 from cameo_mcp import client
 
@@ -9,6 +14,13 @@ def reset_client_state() -> None:
     client._shared_client_base_url = None
     client._capabilities_cache = None
     client._capabilities_cache_base_url = None
+
+
+def _make_base64_png(width: int = 20, height: int = 10) -> str:
+    image = Image.new("RGBA", (width, height), (255, 0, 0, 255))
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
 class BridgeMetadataTests(unittest.TestCase):
@@ -455,3 +467,278 @@ class ClientRequestTests(unittest.IsolatedAsyncioTestCase):
             },
             request.await_args.kwargs["json_body"],
         )
+
+    async def test_get_diagram_image_can_omit_base64_payload_client_side(self) -> None:
+        payload = {
+            "id": "dia-1",
+            "name": "Demo",
+            "format": "png",
+            "width": 20,
+            "height": 10,
+            "image": _make_base64_png(20, 10),
+        }
+
+        with patch("cameo_mcp.client._request", new=AsyncMock(return_value=payload)):
+            result = await client.get_diagram_image("dia-1", include_image=False)
+
+        self.assertEqual("dia-1", result["id"])
+        self.assertTrue(result["imageOmitted"])
+        self.assertNotIn("image", result)
+        self.assertGreater(result["imageBytes"], 0)
+
+    async def test_get_diagram_image_can_resize_and_transcode_client_side(self) -> None:
+        payload = {
+            "id": "dia-1",
+            "name": "Demo",
+            "format": "png",
+            "width": 20,
+            "height": 10,
+            "image": _make_base64_png(20, 10),
+        }
+
+        with patch("cameo_mcp.client._request", new=AsyncMock(return_value=payload)):
+            result = await client.get_diagram_image(
+                "dia-1",
+                format="jpeg",
+                max_width=5,
+                max_height=5,
+                quality=70,
+            )
+
+        self.assertEqual("jpg", result["format"])
+        self.assertLessEqual(result["width"], 5)
+        self.assertLessEqual(result["height"], 5)
+        self.assertIn("image", result)
+        self.assertGreater(result["imageBytes"], 0)
+
+    async def test_list_diagram_shapes_can_filter_and_page_client_side(self) -> None:
+        payload = {
+            "diagramId": "dia-1",
+            "shapeCount": 3,
+            "shapes": [
+                {
+                    "presentationId": "pe-1",
+                    "shapeType": "ActionView",
+                    "elementId": "el-1",
+                    "elementType": "OpaqueAction",
+                    "bounds": {"x": 0, "y": 0, "width": 10, "height": 10},
+                    "childCount": 2,
+                },
+                {
+                    "presentationId": "pe-2",
+                    "shapeType": "ActionView",
+                    "elementId": "el-2",
+                    "elementType": "OpaqueAction",
+                    "bounds": {"x": 20, "y": 0, "width": 10, "height": 10},
+                },
+                {
+                    "presentationId": "pe-3",
+                    "shapeType": "ControlFlowView",
+                    "elementId": "el-3",
+                    "elementType": "ControlFlow",
+                    "parentPresentationId": "pe-1",
+                },
+            ],
+        }
+
+        with patch("cameo_mcp.client._request", new=AsyncMock(return_value=payload)):
+            result = await client.list_diagram_shapes(
+                "dia-1",
+                limit=1,
+                offset=1,
+                element_type="OpaqueAction",
+                include_bounds=False,
+                include_child_count=False,
+            )
+
+        self.assertEqual(2, result["totalCount"])
+        self.assertEqual(["pe-2"], [shape["presentationId"] for shape in result["shapes"]])
+        self.assertNotIn("bounds", result["shapes"][0])
+        self.assertNotIn("childCount", result["shapes"][0])
+
+    async def test_set_transition_label_presentation_builds_request_body(self) -> None:
+        with patch("cameo_mcp.client._request", new=AsyncMock(return_value={"resultCount": 1})) as request:
+            await client.set_transition_label_presentation(
+                "dia-1",
+                presentation_ids=["pe-1"],
+                show_name=True,
+                show_triggers=False,
+                show_guard=True,
+                show_effect=False,
+                reset_labels=True,
+            )
+
+        request.assert_awaited_once()
+        self.assertEqual(
+            {
+                "presentationIds": ["pe-1"],
+                "showName": True,
+                "showTriggers": False,
+                "showGuard": True,
+                "showEffect": False,
+                "resetLabels": True,
+            },
+            request.await_args.kwargs["json_body"],
+        )
+
+    async def test_set_item_flow_label_presentation_builds_request_body(self) -> None:
+        with patch("cameo_mcp.client._request", new=AsyncMock(return_value={"resultCount": 1})) as request:
+            await client.set_item_flow_label_presentation(
+                "dia-1",
+                presentation_ids=["pe-1"],
+                show_name=False,
+                show_conveyed=True,
+                show_item_property=False,
+                show_direction=True,
+                show_stereotype=True,
+                reset_labels=False,
+            )
+
+        request.assert_awaited_once()
+        self.assertEqual(
+            {
+                "presentationIds": ["pe-1"],
+                "showName": False,
+                "showConveyed": True,
+                "showItemProperty": False,
+                "showDirection": True,
+                "showStereotype": True,
+                "resetLabels": False,
+            },
+            request.await_args.kwargs["json_body"],
+        )
+
+    async def test_set_allocation_compartment_presentation_builds_request_body(self) -> None:
+        with patch("cameo_mcp.client._request", new=AsyncMock(return_value={"resultCount": 1})) as request:
+            await client.set_allocation_compartment_presentation(
+                "dia-1",
+                presentation_ids=["pe-1"],
+                show_allocated_elements=True,
+                show_element_properties=False,
+                show_ports=True,
+                show_full_ports=False,
+                apply_allocation_naming=True,
+            )
+
+        request.assert_awaited_once()
+        self.assertEqual(
+            {
+                "presentationIds": ["pe-1"],
+                "showAllocatedElements": True,
+                "showElementProperties": False,
+                "showPorts": True,
+                "showFullPorts": False,
+                "applyAllocationNaming": True,
+            },
+            request.await_args.kwargs["json_body"],
+        )
+
+    async def test_repair_hidden_labels_builds_request_body(self) -> None:
+        with patch("cameo_mcp.client._request", new=AsyncMock(return_value={"resultCount": 1})) as request:
+            await client.repair_hidden_labels(
+                "dia-1",
+                presentation_ids=["pe-1"],
+                dry_run=True,
+            )
+
+        request.assert_awaited_once()
+        self.assertEqual(
+            {
+                "presentationIds": ["pe-1"],
+                "dryRun": True,
+            },
+            request.await_args.kwargs["json_body"],
+        )
+
+    async def test_repair_label_positions_builds_request_body(self) -> None:
+        with patch("cameo_mcp.client._request", new=AsyncMock(return_value={"resultCount": 1})) as request:
+            await client.repair_label_positions(
+                "dia-1",
+                presentation_ids=["pe-1"],
+                dry_run=False,
+                only_overlapping=False,
+                overlap_padding=24,
+            )
+
+        request.assert_awaited_once()
+        self.assertEqual(
+            {
+                "presentationIds": ["pe-1"],
+                "dryRun": False,
+                "onlyOverlapping": False,
+                "overlapPadding": 24,
+            },
+            request.await_args.kwargs["json_body"],
+        )
+
+    async def test_repair_conveyed_item_labels_builds_request_body(self) -> None:
+        with patch("cameo_mcp.client._request", new=AsyncMock(return_value={"resultCount": 1})) as request:
+            await client.repair_conveyed_item_labels(
+                "dia-1",
+                presentation_ids=["pe-1"],
+                dry_run=True,
+                reset_labels=False,
+            )
+
+        request.assert_awaited_once()
+        self.assertEqual(
+            {
+                "presentationIds": ["pe-1"],
+                "dryRun": True,
+                "resetLabels": False,
+            },
+            request.await_args.kwargs["json_body"],
+        )
+
+    async def test_normalize_compartment_presets_builds_request_body(self) -> None:
+        with patch("cameo_mcp.client._request", new=AsyncMock(return_value={"resultCount": 1})) as request:
+            await client.normalize_compartment_presets(
+                "dia-1",
+                presentation_ids=["pe-1"],
+                dry_run=True,
+            )
+
+        request.assert_awaited_once()
+        self.assertEqual(
+            {
+                "presentationIds": ["pe-1"],
+                "dryRun": True,
+            },
+            request.await_args.kwargs["json_body"],
+        )
+
+    async def test_probe_bridge_reports_preferred_paths(self) -> None:
+        class _ProbeResponse:
+            def __init__(self, status_code: int, payload: dict[str, Any]) -> None:
+                self.status_code = status_code
+                self._payload = payload
+                self.content = b"{}"
+                self.text = "{}"
+
+            def json(self) -> dict[str, Any]:
+                return self._payload
+
+        class _ProbeClient:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb) -> None:
+                return None
+
+            async def get(self, path: str) -> _ProbeResponse:
+                payload = {
+                    "pluginVersion": client.BRIDGE_PLUGIN_VERSION,
+                    "apiVersion": client.BRIDGE_API_VERSION,
+                    "handshakeVersion": client.BRIDGE_HANDSHAKE_VERSION,
+                }
+                return _ProbeResponse(200, payload)
+
+        with patch("cameo_mcp.client.httpx.AsyncClient", _ProbeClient):
+            result = await client.probe_bridge()
+
+        self.assertTrue(result["reachable"])
+        self.assertEqual("/status", result["preferredStatusPath"])
+        self.assertEqual("/capabilities", result["preferredCapabilitiesPath"])

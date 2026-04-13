@@ -4,6 +4,7 @@ import com.claude.cameo.bridge.HttpBridgeServer;
 import com.claude.cameo.bridge.util.EdtDispatcher;
 import com.claude.cameo.bridge.util.ElementSerializer;
 import com.claude.cameo.bridge.util.JsonHelper;
+import com.claude.cameo.bridge.util.TaggedValueCoercion;
 import com.nomagic.magicdraw.openapi.uml.ModelElementsManager;
 import com.nomagic.uml2.ext.magicdraw.classes.mdkernel.Classifier;
 import com.nomagic.uml2.ext.magicdraw.classes.mdkernel.Comment;
@@ -205,7 +206,10 @@ public class SpecificationHandler implements HttpHandler {
                 if (tagToStereotype.containsKey(propName)) {
                     Stereotype stereo = tagToStereotype.get(propName);
                     StereotypesHelper.setStereotypePropertyValue(
-                            element, stereo, propName, coerceJsonValue(valueElement, project));
+                            element,
+                            stereo,
+                            propName,
+                            TaggedValueCoercion.coerceForTag(project, stereo, propName, valueElement));
                     setPropertiesArr.add(propName);
                     setCount++;
                     continue;

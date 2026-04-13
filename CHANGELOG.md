@@ -1,5 +1,33 @@
 # Changelog
 
+## 2.3.0 - 2026-04-13
+
+Minor release focused on reducing end-to-end human intervention for review, cleanup, and assignment packaging workflows.
+
+### Added
+
+- Intent-level diagram presentation APIs for transition labels, item-flow labels, and allocation/full-port compartments
+- A built-in bridge probe on the Python side so clients can discover whether local health lives at `/status` or `/api/v1/status`
+- Legacy `/status` and `/capabilities` HTTP aliases alongside the versioned `/api/v1/...` endpoints
+- Native diagram repair endpoints for hidden labels, label-position resets, conveyed-item labels, and diagram-type-aware compartment presets
+- Python-side proofing helpers and MCP tools for requirements, comments, state/transition names, and diagram text, including preview patch plans and optional safe auto-apply
+- Rubric workflow helpers and MCP tools for comparing expected artifacts, validating package scope, exporting required diagrams, and assembling PPT/PDF submission bundles
+- Semantic auto-remediation planning that converts cross-diagram validation findings into previewable receipts and `patchPlan.steps`
+- `python-pptx` as an MCP-server dependency so PPTX assembly can be automated instead of remaining a manual post-step
+
+### Fixed
+
+- Enum-valued stereotype tagged values now resolve actual `EnumerationLiteral` instances by ID or name instead of falling through the generic JSON coercion path
+- `set_specification` now benefits from the same stereotype enum coercion path as `set_tagged_values`
+- Direct Python client consumers can now omit, resize, transcode, page, filter, and summarize large diagram payloads instead of reimplementing the MCP-side shaping logic
+- `ibd` / `bdd` artifact kinds now participate correctly in rubric export/assembly flows instead of being dropped as non-diagrams
+- The bridge capability manifest now advertises the new diagram repair endpoints alongside the earlier presentation presets
+
+### Changed
+
+- Bumped the in-repo Python/plugin/methodology compatibility line to `2.3.0`
+- Expanded the README tool reference to document repair, proofing, rubric workflow, and remediation surfaces
+
 ## 2.1.0 - 2026-04-13
 
 Minor release focused on hardening the MCP contract around diagram inspection and activity swimlane editing.

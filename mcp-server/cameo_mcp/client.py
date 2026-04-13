@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
+from collections import Counter
+from io import BytesIO
 from typing import Any, Optional
 
 import httpx
+from PIL import Image
 
-BRIDGE_PLUGIN_VERSION = "2.1.0"
+BRIDGE_PLUGIN_VERSION = "2.3.0"
 BRIDGE_API_VERSION = "v1"
 BRIDGE_HANDSHAKE_VERSION = "1"
 
@@ -84,6 +88,148 @@ def normalize_diagram_type(diagram_type: str) -> str:
 def normalize_matrix_kind(kind: str) -> str:
     """Map user-facing matrix aliases to the validated native kind set."""
     return _MATRIX_KIND_ALIASES.get(_normalize_lookup_key(kind), kind.strip())
+
+
+def _count_by_key(items: list[dict[str, Any]], key: str) -> dict[str, int]:
+    counter = Counter(str(item.get(key)) for item in items if item.get(key))
+    return dict(sorted(counter.items(), key=lambda entry: (-entry[1], entry[0].lower())))
+
+
+def _filter_diagram_shapes(
+    result: dict[str, Any],
+    *,
+    limit: int,
+    offset: int,
+    shape_type: Optional[str],
+    element_type: Optional[str],
+    parent_presentation_id: Optional[str],
+    include_bounds: bool,
+    include_child_count: bool,
+    summary_only: bool,
+) -> dict[str, Any]:
+    shapes = [shape for shape in (result.get("shapes") or []) if isinstance(shape, dict)]
+
+    def _matches(shape: dict[str, Any]) -> bool:
+        if shape_type and str(shape.get("shapeType", "")).lower() != shape_type.lower():
+            return False
+        if element_type and str(shape.get("elementType", "")).lower() != element_type.lower():
+            return False
+        if (
+            parent_presentation_id
+            and str(shape.get("parentPresentationId", "")) != parent_presentation_id
+        ):
+            return False
+        return True
+
+    filtered = [shape for shape in shapes if _matches(shape)]
+    start = min(max(offset, 0), len(filtered))
+    end = min(start + max(limit, 0), len(filtered))
+    page = filtered[start:end]
+
+    if not include_bounds or not include_child_count:
+        projected_page: list[dict[str, Any]] = []
+        for shape in page:
+            projected = dict(shape)
+            if not include_bounds:
+                projected.pop("bounds", None)
+            if not include_child_count:
+                projected.pop("childCount", None)
+            projected_page.append(projected)
+        page = projected_page
+
+    response: dict[str, Any] = {
+        "diagramId": result.get("diagramId"),
+        "count": len(page),
+        "returned": len(page),
+        "totalCount": len(filtered),
+        "shapeCount": len(filtered),
+        "limit": limit,
+        "offset": start,
+        "hasMore": end < len(filtered),
+        "filters": {
+            "shapeType": shape_type,
+            "elementType": element_type,
+            "parentPresentationId": parent_presentation_id,
+            "includeBounds": include_bounds,
+            "includeChildCount": include_child_count,
+            "summaryOnly": summary_only,
+        },
+    }
+    if end < len(filtered):
+        response["nextOffset"] = end
+
+    if summary_only:
+        response["shapeTypeCounts"] = _count_by_key(filtered, "shapeType")
+        response["elementTypeCounts"] = _count_by_key(filtered, "elementType")
+        response["parentedShapeCount"] = sum(
+            1 for shape in filtered if shape.get("parentPresentationId")
+        )
+        return response
+
+    response["shapes"] = page
+    return response
+
+
+def _transform_diagram_image(
+    result: dict[str, Any],
+    *,
+    include_image: bool,
+    format: str,
+    max_width: Optional[int],
+    max_height: Optional[int],
+    quality: int,
+) -> dict[str, Any]:
+    base64_image = result.get("image")
+    if not isinstance(base64_image, str) or not base64_image:
+        return dict(result)
+
+    image_bytes = base64.b64decode(base64_image)
+    response = dict(result)
+    response["imageBytes"] = len(image_bytes)
+
+    if not include_image:
+        response.pop("image", None)
+        response["imageOmitted"] = True
+        return response
+
+    normalized_format = format.lower()
+    if normalized_format == "jpg":
+        normalized_format = "jpeg"
+    if normalized_format not in {"png", "jpeg", "webp"}:
+        raise ValueError("format must be one of: png, jpeg, jpg, webp")
+
+    resize_requested = max_width is not None or max_height is not None
+    transcode_requested = normalized_format != str(result.get("format", "png")).lower()
+    if not resize_requested and not transcode_requested:
+        return response
+
+    with Image.open(BytesIO(image_bytes)) as image:
+        transformed = image.copy()
+        if resize_requested:
+            target_width = max_width if max_width is not None and max_width > 0 else image.width
+            target_height = max_height if max_height is not None and max_height > 0 else image.height
+            transformed.thumbnail((target_width, target_height), Image.Resampling.LANCZOS)
+
+        buffer = BytesIO()
+        if normalized_format == "jpeg":
+            if transformed.mode not in {"RGB", "L"}:
+                flattened = Image.new("RGB", transformed.size, "white")
+                alpha_source = transformed.convert("RGBA")
+                flattened.paste(alpha_source, mask=alpha_source.getchannel("A"))
+                transformed = flattened
+            transformed.save(buffer, format="JPEG", quality=max(1, min(quality, 100)))
+        elif normalized_format == "webp":
+            transformed.save(buffer, format="WEBP", quality=max(1, min(quality, 100)))
+        else:
+            transformed.save(buffer, format="PNG")
+
+        encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+        response["format"] = "jpg" if normalized_format == "jpeg" else normalized_format
+        response["width"] = transformed.width
+        response["height"] = transformed.height
+        response["image"] = encoded
+        response["imageBytes"] = len(buffer.getvalue())
+        return response
 
 
 def _base_url() -> str:
@@ -490,6 +636,67 @@ async def get_capabilities() -> dict[str, Any]:
     return _annotate_bridge_metadata(await _request_raw("GET", "/capabilities"))
 
 
+async def probe_bridge() -> dict[str, Any]:
+    """Probe common bridge health/capability endpoints without assuming one path."""
+    port = os.environ.get("CAMEO_BRIDGE_PORT", "18740")
+    root_url = f"http://127.0.0.1:{port}"
+    probes = [
+        ("status", "/status"),
+        ("status", "/api/v1/status"),
+        ("capabilities", "/capabilities"),
+        ("capabilities", "/api/v1/capabilities"),
+    ]
+    results: list[dict[str, Any]] = []
+
+    try:
+        async with httpx.AsyncClient(base_url=root_url, timeout=5.0) as probe_client:
+            for kind, path in probes:
+                entry: dict[str, Any] = {"kind": kind, "path": path}
+                try:
+                    response = await probe_client.get(path)
+                    entry["statusCode"] = response.status_code
+                    if response.status_code == 204 or not response.content:
+                        entry["ok"] = True
+                        entry["payload"] = {"status": "ok"}
+                    else:
+                        try:
+                            payload = response.json()
+                        except Exception:
+                            payload = {"rawText": response.text}
+                        entry["ok"] = 200 <= response.status_code < 300
+                        entry["payload"] = payload
+                        if isinstance(payload, dict) and (
+                            payload.get("pluginVersion") or payload.get("version")
+                        ):
+                            entry["payload"] = _annotate_bridge_metadata(payload)
+                except Exception as exc:
+                    entry["ok"] = False
+                    entry["error"] = str(exc)
+                results.append(entry)
+    except httpx.ConnectError:
+        return {
+            "reachable": False,
+            "baseUrl": root_url,
+            "preferredStatusPath": None,
+            "preferredCapabilitiesPath": None,
+            "results": results,
+        }
+
+    def _preferred(kind: str) -> Optional[str]:
+        for entry in results:
+            if entry.get("kind") == kind and entry.get("ok"):
+                return str(entry["path"])
+        return None
+
+    return {
+        "reachable": any(entry.get("ok") for entry in results),
+        "baseUrl": root_url,
+        "preferredStatusPath": _preferred("status"),
+        "preferredCapabilitiesPath": _preferred("capabilities"),
+        "results": results,
+    }
+
+
 async def get_project() -> dict[str, Any]:
     """Get current project info."""
     return await _request("GET", "/project")
@@ -813,9 +1020,25 @@ async def add_to_diagram(
     return await _request("POST", f"/diagrams/{diagram_id}/elements", json_body=body)
 
 
-async def get_diagram_image(diagram_id: str) -> dict[str, Any]:
-    """Export a diagram as a base64-encoded image."""
-    return await _request("GET", f"/diagrams/{diagram_id}/image")
+async def get_diagram_image(
+    diagram_id: str,
+    *,
+    include_image: bool = True,
+    format: str = "png",
+    max_width: Optional[int] = None,
+    max_height: Optional[int] = None,
+    quality: int = 85,
+) -> dict[str, Any]:
+    """Export a diagram image, optionally omitting/resizing/transcoding it client-side."""
+    result = await _request("GET", f"/diagrams/{diagram_id}/image")
+    return _transform_diagram_image(
+        result,
+        include_image=include_image,
+        format=format,
+        max_width=max_width,
+        max_height=max_height,
+        quality=quality,
+    )
 
 
 async def auto_layout(diagram_id: str) -> dict[str, Any]:
@@ -825,9 +1048,31 @@ async def auto_layout(diagram_id: str) -> dict[str, Any]:
 # -- Diagram Shape Management -------------------------------------------------
 
 
-async def list_diagram_shapes(diagram_id: str) -> dict[str, Any]:
-    """List all shapes and paths on a diagram with bounds and element info."""
-    return await _request("GET", f"/diagrams/{diagram_id}/shapes")
+async def list_diagram_shapes(
+    diagram_id: str,
+    *,
+    limit: int = 200,
+    offset: int = 0,
+    shape_type: Optional[str] = None,
+    element_type: Optional[str] = None,
+    parent_presentation_id: Optional[str] = None,
+    include_bounds: bool = True,
+    include_child_count: bool = True,
+    summary_only: bool = False,
+) -> dict[str, Any]:
+    """List diagram shapes, optionally filtered/paged client-side."""
+    result = await _request("GET", f"/diagrams/{diagram_id}/shapes")
+    return _filter_diagram_shapes(
+        result,
+        limit=limit,
+        offset=offset,
+        shape_type=shape_type,
+        element_type=element_type,
+        parent_presentation_id=parent_presentation_id,
+        include_bounds=include_bounds,
+        include_child_count=include_child_count,
+        summary_only=summary_only,
+    )
 
 
 async def get_shape_properties(
@@ -881,6 +1126,167 @@ async def set_shape_compartments(
         "PUT",
         f"/diagrams/{diagram_id}/shapes/{presentation_id}/compartments",
         json_body={"compartments": compartments},
+    )
+
+
+async def set_transition_label_presentation(
+    diagram_id: str,
+    *,
+    presentation_ids: Optional[list[str]] = None,
+    show_name: bool = True,
+    show_triggers: bool = True,
+    show_guard: bool = False,
+    show_effect: bool = False,
+    reset_labels: bool = True,
+) -> dict[str, Any]:
+    """Apply an intent-level transition-label display preset."""
+    body: dict[str, Any] = {
+        "showName": show_name,
+        "showTriggers": show_triggers,
+        "showGuard": show_guard,
+        "showEffect": show_effect,
+        "resetLabels": reset_labels,
+    }
+    if presentation_ids is not None:
+        body["presentationIds"] = presentation_ids
+    return await _request(
+        "PUT",
+        f"/diagrams/{diagram_id}/presentation/transition-labels",
+        json_body=body,
+    )
+
+
+async def set_item_flow_label_presentation(
+    diagram_id: str,
+    *,
+    presentation_ids: Optional[list[str]] = None,
+    show_name: bool = False,
+    show_conveyed: bool = True,
+    show_item_property: bool = True,
+    show_direction: bool = True,
+    show_stereotype: bool = False,
+    reset_labels: bool = True,
+) -> dict[str, Any]:
+    """Apply an intent-level item-flow label display preset."""
+    body: dict[str, Any] = {
+        "showName": show_name,
+        "showConveyed": show_conveyed,
+        "showItemProperty": show_item_property,
+        "showDirection": show_direction,
+        "showStereotype": show_stereotype,
+        "resetLabels": reset_labels,
+    }
+    if presentation_ids is not None:
+        body["presentationIds"] = presentation_ids
+    return await _request(
+        "PUT",
+        f"/diagrams/{diagram_id}/presentation/item-flow-labels",
+        json_body=body,
+    )
+
+
+async def set_allocation_compartment_presentation(
+    diagram_id: str,
+    *,
+    presentation_ids: Optional[list[str]] = None,
+    show_allocated_elements: bool = True,
+    show_element_properties: bool = True,
+    show_ports: bool = True,
+    show_full_ports: bool = True,
+    apply_allocation_naming: bool = True,
+) -> dict[str, Any]:
+    """Apply an intent-level SysML allocation/full-port presentation preset."""
+    body: dict[str, Any] = {
+        "showAllocatedElements": show_allocated_elements,
+        "showElementProperties": show_element_properties,
+        "showPorts": show_ports,
+        "showFullPorts": show_full_ports,
+        "applyAllocationNaming": apply_allocation_naming,
+    }
+    if presentation_ids is not None:
+        body["presentationIds"] = presentation_ids
+    return await _request(
+        "PUT",
+        f"/diagrams/{diagram_id}/presentation/allocation-compartments",
+        json_body=body,
+    )
+
+
+async def repair_hidden_labels(
+    diagram_id: str,
+    *,
+    presentation_ids: Optional[list[str]] = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Auto-show hidden labels using diagram-type-aware defaults."""
+    body: dict[str, Any] = {"dryRun": dry_run}
+    if presentation_ids is not None:
+        body["presentationIds"] = presentation_ids
+    return await _request(
+        "PUT",
+        f"/diagrams/{diagram_id}/repair/hidden-labels",
+        json_body=body,
+    )
+
+
+async def repair_label_positions(
+    diagram_id: str,
+    *,
+    presentation_ids: Optional[list[str]] = None,
+    dry_run: bool = False,
+    only_overlapping: bool = True,
+    overlap_padding: int = 40,
+) -> dict[str, Any]:
+    """Reset label positions, optionally only for likely-overlapping path labels."""
+    body: dict[str, Any] = {
+        "dryRun": dry_run,
+        "onlyOverlapping": only_overlapping,
+        "overlapPadding": overlap_padding,
+    }
+    if presentation_ids is not None:
+        body["presentationIds"] = presentation_ids
+    return await _request(
+        "PUT",
+        f"/diagrams/{diagram_id}/repair/label-positions",
+        json_body=body,
+    )
+
+
+async def repair_conveyed_item_labels(
+    diagram_id: str,
+    *,
+    presentation_ids: Optional[list[str]] = None,
+    dry_run: bool = False,
+    reset_labels: bool = True,
+) -> dict[str, Any]:
+    """Force conveyed-item labels on eligible path elements."""
+    body: dict[str, Any] = {
+        "dryRun": dry_run,
+        "resetLabels": reset_labels,
+    }
+    if presentation_ids is not None:
+        body["presentationIds"] = presentation_ids
+    return await _request(
+        "PUT",
+        f"/diagrams/{diagram_id}/repair/conveyed-item-labels",
+        json_body=body,
+    )
+
+
+async def normalize_compartment_presets(
+    diagram_id: str,
+    *,
+    presentation_ids: Optional[list[str]] = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Normalize compartment presets based on diagram type defaults."""
+    body: dict[str, Any] = {"dryRun": dry_run}
+    if presentation_ids is not None:
+        body["presentationIds"] = presentation_ids
+    return await _request(
+        "PUT",
+        f"/diagrams/{diagram_id}/repair/compartment-presets",
+        json_body=body,
     )
 
 

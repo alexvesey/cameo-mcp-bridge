@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cameo-mcp-server"
-version = "2.1.0"
+version = "2.3.0"
 description = "MCP server bridging AI assistants to CATIA Magic / Cameo Systems Modeler"
 requires-python = ">=3.10"
 license = "MIT"
@@ -16,6 +16,7 @@ dependencies = [
     "mcp>=1.0.0",
     "httpx>=0.25.0",
     "Pillow>=10.0.0",
+    "python-pptx>=1.0.2",
 ]
 
 [project.urls]

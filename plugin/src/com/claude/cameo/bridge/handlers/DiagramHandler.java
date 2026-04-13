@@ -33,10 +33,13 @@ import java.io.IOException;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.Base64;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.function.Predicate;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -114,6 +117,20 @@ public class DiagramHandler implements HttpHandler {
                     String peId = subPath.substring("shapes/".length(),
                             subPath.length() - "/compartments".length());
                     handleSetShapeCompartments(exchange, diagramId, peId);
+                } else if (diagramId != null && "presentation/transition-labels".equals(subPath)) {
+                    handleConfigureTransitionLabelPresentation(exchange, diagramId);
+                } else if (diagramId != null && "presentation/item-flow-labels".equals(subPath)) {
+                    handleConfigureItemFlowLabelPresentation(exchange, diagramId);
+                } else if (diagramId != null && "presentation/allocation-compartments".equals(subPath)) {
+                    handleConfigureAllocationCompartmentPresentation(exchange, diagramId);
+                } else if (diagramId != null && "repair/hidden-labels".equals(subPath)) {
+                    handleRepairHiddenLabels(exchange, diagramId);
+                } else if (diagramId != null && "repair/label-positions".equals(subPath)) {
+                    handleRepairLabelPositions(exchange, diagramId);
+                } else if (diagramId != null && "repair/conveyed-item-labels".equals(subPath)) {
+                    handleForceConveyedItemLabels(exchange, diagramId);
+                } else if (diagramId != null && "repair/compartment-presets".equals(subPath)) {
+                    handleNormalizeCompartmentPresets(exchange, diagramId);
                 } else {
                     HttpBridgeServer.sendError(exchange, 404, "NOT_FOUND",
                             "Unknown endpoint: " + path);
@@ -979,6 +996,421 @@ public class DiagramHandler implements HttpHandler {
         HttpBridgeServer.sendJson(exchange, 200, result);
     }
 
+    private void handleConfigureTransitionLabelPresentation(
+            HttpExchange exchange,
+            String diagramId) throws Exception {
+        JsonObject body = JsonHelper.parseBody(exchange);
+        List<String> presentationIds = JsonHelper.optionalStringList(body, "presentationIds");
+        boolean showName = readBoolean(body, "showName", true);
+        boolean showTriggers = readBoolean(body, "showTriggers", true);
+        boolean showGuard = readBoolean(body, "showGuard", false);
+        boolean showEffect = readBoolean(body, "showEffect", false);
+        boolean resetLabels = readBoolean(body, "resetLabels", true);
+
+        JsonObject result = EdtDispatcher.write("MCP Bridge: Configure Transition Label Presentation", project -> {
+            DiagramPresentationElement dpe = findDiagramById(project, diagramId);
+            dpe.ensureLoaded();
+
+            List<PresentationElement> targets = selectPresentationElements(
+                    dpe.getPresentationElements(),
+                    presentationIds,
+                    this::isTransitionPathPresentation);
+
+            PresentationElementsManager pem = PresentationElementsManager.getInstance();
+            JsonArray results = new JsonArray();
+            Map<String, PropertySelection> selections = new LinkedHashMap<>();
+            selections.put("showName", new PropertySelection(showName, List.of("Show Name"), List.of("showname")));
+            selections.put("showTriggers", new PropertySelection(showTriggers, List.of(), List.of("showtrigger", "showtriggers")));
+            selections.put("showGuard", new PropertySelection(showGuard, List.of(), List.of("showguard")));
+            selections.put("showEffect", new PropertySelection(showEffect, List.of(), List.of("showeffect")));
+            for (PresentationElement target : targets) {
+                results.add(configurePresentationProperties(target, pem, selections, resetLabels));
+            }
+
+            JsonObject response = new JsonObject();
+            response.addProperty("diagramId", diagramId);
+            response.addProperty("resultCount", results.size());
+            response.add("results", results);
+            JsonObject receipt = new JsonObject();
+            receipt.addProperty("operation", "configureTransitionLabelPresentation");
+            receipt.addProperty("diagramId", diagramId);
+            receipt.addProperty("status", "applied");
+            response.add("receipt", receipt);
+            return response;
+        });
+
+        HttpBridgeServer.sendJson(exchange, 200, result);
+    }
+
+    private void handleConfigureItemFlowLabelPresentation(
+            HttpExchange exchange,
+            String diagramId) throws Exception {
+        JsonObject body = JsonHelper.parseBody(exchange);
+        List<String> presentationIds = JsonHelper.optionalStringList(body, "presentationIds");
+        boolean showName = readBoolean(body, "showName", false);
+        boolean showConveyed = readBoolean(body, "showConveyed", true);
+        boolean showItemProperty = readBoolean(body, "showItemProperty", true);
+        boolean showDirection = readBoolean(body, "showDirection", true);
+        boolean showStereotype = readBoolean(body, "showStereotype", false);
+        boolean resetLabels = readBoolean(body, "resetLabels", true);
+
+        JsonObject result = EdtDispatcher.write("MCP Bridge: Configure Item Flow Label Presentation", project -> {
+            DiagramPresentationElement dpe = findDiagramById(project, diagramId);
+            dpe.ensureLoaded();
+
+            List<PresentationElement> targets = selectPresentationElements(
+                    dpe.getPresentationElements(),
+                    presentationIds,
+                    this::isItemFlowPathPresentation);
+
+            PresentationElementsManager pem = PresentationElementsManager.getInstance();
+            JsonArray results = new JsonArray();
+            Map<String, PropertySelection> selections = new LinkedHashMap<>();
+            selections.put("showName", new PropertySelection(showName, List.of("Show Name"), List.of("showname")));
+            selections.put("showConveyed", new PropertySelection(showConveyed, List.of(), List.of("conveyed", "informationflow")));
+            selections.put("showItemProperty", new PropertySelection(showItemProperty, List.of(), List.of("itemproperty")));
+            selections.put("showDirection", new PropertySelection(showDirection, List.of(), List.of("showdirection", "direction")));
+            selections.put("showStereotype", new PropertySelection(showStereotype, List.of("Show Stereotype"), List.of("showstereotype")));
+            for (PresentationElement target : targets) {
+                results.add(configurePresentationProperties(target, pem, selections, resetLabels));
+            }
+
+            JsonObject response = new JsonObject();
+            response.addProperty("diagramId", diagramId);
+            response.addProperty("resultCount", results.size());
+            response.add("results", results);
+            JsonObject receipt = new JsonObject();
+            receipt.addProperty("operation", "configureItemFlowLabelPresentation");
+            receipt.addProperty("diagramId", diagramId);
+            receipt.addProperty("status", "applied");
+            response.add("receipt", receipt);
+            return response;
+        });
+
+        HttpBridgeServer.sendJson(exchange, 200, result);
+    }
+
+    private void handleConfigureAllocationCompartmentPresentation(
+            HttpExchange exchange,
+            String diagramId) throws Exception {
+        JsonObject body = JsonHelper.parseBody(exchange);
+        List<String> presentationIds = JsonHelper.optionalStringList(body, "presentationIds");
+        boolean showAllocatedElements = readBoolean(body, "showAllocatedElements", true);
+        boolean showElementProperties = readBoolean(body, "showElementProperties", true);
+        boolean showPorts = readBoolean(body, "showPorts", true);
+        boolean showFullPorts = readBoolean(body, "showFullPorts", true);
+        boolean applyAllocationNaming = readBoolean(body, "applyAllocationNaming", true);
+
+        JsonObject result = EdtDispatcher.write("MCP Bridge: Configure Allocation Compartments", project -> {
+            DiagramPresentationElement dpe = findDiagramById(project, diagramId);
+            dpe.ensureLoaded();
+
+            List<PresentationElement> targets = selectPresentationElements(
+                    dpe.getPresentationElements(),
+                    presentationIds,
+                    this::isAllocationCompartmentCandidate);
+
+            PresentationElementsManager pem = PresentationElementsManager.getInstance();
+            JsonArray results = new JsonArray();
+            Map<String, PropertySelection> selections = new LinkedHashMap<>();
+            selections.put("showAllocatedElements", new PropertySelection(
+                    showAllocatedElements,
+                    List.of(),
+                    List.of("allocatedelements", "allocatedfrom")));
+            selections.put("showElementProperties", new PropertySelection(
+                    showElementProperties,
+                    List.of("Show Element Properties"),
+                    List.of("showelementproperties")));
+            selections.put("showPorts", new PropertySelection(
+                    showPorts,
+                    List.of("Show Ports"),
+                    List.of("showports")));
+            selections.put("showFullPorts", new PropertySelection(
+                    showFullPorts,
+                    List.of("Show Full Ports", "Suppress Full Ports"),
+                    List.of("showfullports", "suppressfullports")));
+            selections.put("applyAllocationNaming", new PropertySelection(
+                    applyAllocationNaming,
+                    List.of("Apply SysML 1.7 Allocation Compartment Naming"),
+                    List.of("allocationcompartmentnaming")));
+            for (PresentationElement target : targets) {
+                results.add(configurePresentationProperties(target, pem, selections, false));
+            }
+
+            JsonObject response = new JsonObject();
+            response.addProperty("diagramId", diagramId);
+            response.addProperty("resultCount", results.size());
+            response.add("results", results);
+            JsonObject receipt = new JsonObject();
+            receipt.addProperty("operation", "configureAllocationCompartmentPresentation");
+            receipt.addProperty("diagramId", diagramId);
+            receipt.addProperty("status", "applied");
+            response.add("receipt", receipt);
+            return response;
+        });
+
+        HttpBridgeServer.sendJson(exchange, 200, result);
+    }
+
+    private void handleRepairHiddenLabels(HttpExchange exchange, String diagramId) throws Exception {
+        JsonObject body = JsonHelper.parseBody(exchange);
+        List<String> presentationIds = JsonHelper.optionalStringList(body, "presentationIds");
+        boolean dryRun = readBoolean(body, "dryRun", false);
+
+        JsonObject result = EdtDispatcher.write("MCP Bridge: Repair Hidden Labels", project -> {
+            DiagramPresentationElement dpe = findDiagramById(project, diagramId);
+            dpe.ensureLoaded();
+
+            String diagramType = diagramTypeName(dpe);
+            RepairDefaults defaults = repairDefaultsForDiagramType(diagramType);
+            Map<String, PropertySelection> selections = buildSelectionMap(
+                    true,
+                    defaults.hiddenLabelKeys);
+
+            List<PresentationElement> targets = selectPresentationElements(
+                    dpe.getPresentationElements(),
+                    presentationIds,
+                    target -> targetSupportsAnySelection(target, selections));
+
+            PresentationElementsManager pem = PresentationElementsManager.getInstance();
+            JsonArray results = new JsonArray();
+            for (PresentationElement target : targets) {
+                JsonObject entry = configurePresentationProperties(
+                        target, pem, selections, false, !dryRun);
+                entry.addProperty("repairMode", "hidden-labels");
+                entry.addProperty("applied", !dryRun);
+                entry.addProperty("status", dryRun ? "preview" : "applied");
+                entry.add("receipt", buildRepairReceipt(
+                        "repairHiddenLabels",
+                        diagramId,
+                        diagramType,
+                        target.getID(),
+                        !dryRun,
+                        false,
+                        entry));
+                results.add(entry);
+            }
+
+            JsonObject response = new JsonObject();
+            response.addProperty("diagramId", diagramId);
+            response.addProperty("diagramType", diagramType);
+            response.addProperty("repairMode", "hidden-labels");
+            response.addProperty("dryRun", dryRun);
+            response.addProperty("resultCount", results.size());
+            response.addProperty("updatedCount", countUpdatedTargets(results));
+            response.add("results", results);
+            response.add("receipt", buildBatchRepairReceipt(
+                    "repairHiddenLabels",
+                    diagramId,
+                    diagramType,
+                    dryRun,
+                    targets.size(),
+                    countUpdatedTargets(results),
+                    results.size()));
+            return response;
+        });
+
+        HttpBridgeServer.sendJson(exchange, 200, result);
+    }
+
+    private void handleRepairLabelPositions(HttpExchange exchange, String diagramId) throws Exception {
+        JsonObject body = JsonHelper.parseBody(exchange);
+        List<String> presentationIds = JsonHelper.optionalStringList(body, "presentationIds");
+        boolean dryRun = readBoolean(body, "dryRun", false);
+        boolean onlyOverlapping = readBoolean(body, "onlyOverlapping", true);
+        int overlapPadding = body.has("overlapPadding")
+                ? Math.max(0, body.get("overlapPadding").getAsInt())
+                : 40;
+
+        JsonObject result = EdtDispatcher.write("MCP Bridge: Repair Label Positions", project -> {
+            DiagramPresentationElement dpe = findDiagramById(project, diagramId);
+            dpe.ensureLoaded();
+
+            String diagramType = diagramTypeName(dpe);
+            List<PresentationElement> targets = selectPresentationElements(
+                    dpe.getPresentationElements(),
+                    presentationIds,
+                    pe -> pe instanceof PathElement);
+            if (onlyOverlapping) {
+                targets = selectOverlappingPathTargets(targets, overlapPadding);
+            }
+
+            PresentationElementsManager pem = PresentationElementsManager.getInstance();
+            JsonArray results = new JsonArray();
+            for (PresentationElement target : targets) {
+                JsonObject entry = new JsonObject();
+                entry.addProperty("presentationId", target.getID());
+                entry.addProperty("elementType", target.getElement() != null
+                        ? target.getElement().getHumanType() : "");
+                entry.addProperty("overlapCandidate", true);
+                entry.addProperty("applied", !dryRun);
+                if (!dryRun) {
+                    pem.resetLabelPositions((PathElement) target);
+                }
+                JsonObject receipt = new JsonObject();
+                receipt.addProperty("operation", "repairLabelPositions");
+                receipt.addProperty("diagramId", diagramId);
+                receipt.addProperty("diagramType", diagramType);
+                receipt.addProperty("presentationId", target.getID());
+                receipt.addProperty("onlyOverlapping", onlyOverlapping);
+                receipt.addProperty("overlapPadding", overlapPadding);
+                receipt.addProperty("status", dryRun ? "preview" : "applied");
+                entry.add("receipt", receipt);
+                results.add(entry);
+            }
+
+            JsonObject response = new JsonObject();
+            response.addProperty("diagramId", diagramId);
+            response.addProperty("diagramType", diagramType);
+            response.addProperty("repairMode", "label-positions");
+            response.addProperty("dryRun", dryRun);
+            response.addProperty("onlyOverlapping", onlyOverlapping);
+            response.addProperty("overlapPadding", overlapPadding);
+            response.addProperty("resultCount", results.size());
+            response.add("results", results);
+            response.add("receipt", buildBatchRepairReceipt(
+                    "repairLabelPositions",
+                    diagramId,
+                    diagramType,
+                    dryRun,
+                    targets.size(),
+                    countUpdatedTargets(results),
+                    results.size()));
+            return response;
+        });
+
+        HttpBridgeServer.sendJson(exchange, 200, result);
+    }
+
+    private void handleForceConveyedItemLabels(
+            HttpExchange exchange,
+            String diagramId) throws Exception {
+        JsonObject body = JsonHelper.parseBody(exchange);
+        List<String> presentationIds = JsonHelper.optionalStringList(body, "presentationIds");
+        boolean dryRun = readBoolean(body, "dryRun", false);
+        boolean resetLabels = readBoolean(body, "resetLabels", true);
+
+        JsonObject result = EdtDispatcher.write("MCP Bridge: Force Conveyed Item Labels", project -> {
+            DiagramPresentationElement dpe = findDiagramById(project, diagramId);
+            dpe.ensureLoaded();
+
+            String diagramType = diagramTypeName(dpe);
+            RepairDefaults defaults = repairDefaultsForDiagramType(diagramType);
+            Map<String, PropertySelection> selections = buildSelectionMap(
+                    false,
+                    defaults.conveyedItemKeys);
+
+            List<PresentationElement> targets = selectPresentationElements(
+                    dpe.getPresentationElements(),
+                    presentationIds,
+                    target -> target instanceof PathElement && targetSupportsAnySelection(target, selections));
+
+            PresentationElementsManager pem = PresentationElementsManager.getInstance();
+            JsonArray results = new JsonArray();
+            for (PresentationElement target : targets) {
+                JsonObject entry = configurePresentationProperties(
+                        target, pem, selections, resetLabels, !dryRun);
+                entry.addProperty("repairMode", "conveyed-item-labels");
+                entry.addProperty("applied", !dryRun);
+                entry.addProperty("status", dryRun ? "preview" : "applied");
+                entry.add("receipt", buildRepairReceipt(
+                        "repairConveyedItemLabels",
+                        diagramId,
+                        diagramType,
+                        target.getID(),
+                        !dryRun,
+                        resetLabels,
+                        entry));
+                results.add(entry);
+            }
+
+            JsonObject response = new JsonObject();
+            response.addProperty("diagramId", diagramId);
+            response.addProperty("diagramType", diagramType);
+            response.addProperty("repairMode", "conveyed-item-labels");
+            response.addProperty("dryRun", dryRun);
+            response.addProperty("resetLabels", resetLabels);
+            response.addProperty("resultCount", results.size());
+            response.addProperty("updatedCount", countUpdatedTargets(results));
+            response.add("results", results);
+            response.add("receipt", buildBatchRepairReceipt(
+                    "repairConveyedItemLabels",
+                    diagramId,
+                    diagramType,
+                    dryRun,
+                    targets.size(),
+                    countUpdatedTargets(results),
+                    results.size()));
+            return response;
+        });
+
+        HttpBridgeServer.sendJson(exchange, 200, result);
+    }
+
+    private void handleNormalizeCompartmentPresets(
+            HttpExchange exchange,
+            String diagramId) throws Exception {
+        JsonObject body = JsonHelper.parseBody(exchange);
+        List<String> presentationIds = JsonHelper.optionalStringList(body, "presentationIds");
+        boolean dryRun = readBoolean(body, "dryRun", false);
+
+        JsonObject result = EdtDispatcher.write("MCP Bridge: Normalize Compartment Presets", project -> {
+            DiagramPresentationElement dpe = findDiagramById(project, diagramId);
+            dpe.ensureLoaded();
+
+            String diagramType = diagramTypeName(dpe);
+            RepairDefaults defaults = repairDefaultsForDiagramType(diagramType);
+            Map<String, PropertySelection> selections = buildSelectionMap(
+                    true,
+                    defaults.compartmentKeys);
+
+            List<PresentationElement> targets = selectPresentationElements(
+                    dpe.getPresentationElements(),
+                    presentationIds,
+                    target -> target instanceof ShapeElement
+                            && targetSupportsAnySelection(target, selections));
+
+            PresentationElementsManager pem = PresentationElementsManager.getInstance();
+            JsonArray results = new JsonArray();
+            for (PresentationElement target : targets) {
+                JsonObject entry = configurePresentationProperties(
+                        target, pem, selections, false, !dryRun);
+                entry.addProperty("repairMode", "compartment-presets");
+                entry.addProperty("applied", !dryRun);
+                entry.addProperty("status", dryRun ? "preview" : "applied");
+                entry.add("receipt", buildRepairReceipt(
+                        "normalizeCompartmentPresets",
+                        diagramId,
+                        diagramType,
+                        target.getID(),
+                        !dryRun,
+                        false,
+                        entry));
+                results.add(entry);
+            }
+
+            JsonObject response = new JsonObject();
+            response.addProperty("diagramId", diagramId);
+            response.addProperty("diagramType", diagramType);
+            response.addProperty("repairMode", "compartment-presets");
+            response.addProperty("dryRun", dryRun);
+            response.addProperty("resultCount", results.size());
+            response.addProperty("updatedCount", countUpdatedTargets(results));
+            response.add("results", results);
+            response.add("receipt", buildBatchRepairReceipt(
+                    "normalizeCompartmentPresets",
+                    diagramId,
+                    diagramType,
+                    dryRun,
+                    targets.size(),
+                    countUpdatedTargets(results),
+                    results.size()));
+            return response;
+        });
+
+        HttpBridgeServer.sendJson(exchange, 200, result);
+    }
+
     private void handleRoutePaths(HttpExchange exchange, String diagramId) throws Exception {
         JsonObject body = JsonHelper.parseBody(exchange);
         if (!body.has("routes") || !body.get("routes").isJsonArray()) {
@@ -1051,6 +1483,493 @@ public class DiagramHandler implements HttpHandler {
         });
 
         HttpBridgeServer.sendJson(exchange, 200, result);
+    }
+
+    private JsonObject configurePresentationProperties(
+            PresentationElement target,
+            PresentationElementsManager pem,
+            Map<String, PropertySelection> selections,
+            boolean resetLabels) {
+        return configurePresentationProperties(target, pem, selections, resetLabels, true);
+    }
+
+    private JsonObject configurePresentationProperties(
+            PresentationElement target,
+            PresentationElementsManager pem,
+            Map<String, PropertySelection> selections,
+            boolean resetLabels,
+            boolean applyChanges) {
+        PropertyManager pm = target.getPropertyManager().clone();
+        @SuppressWarnings("unchecked")
+        List<Property> properties = pm.getProperties();
+        JsonArray updated = new JsonArray();
+
+        for (Map.Entry<String, PropertySelection> selection : selections.entrySet()) {
+            applyPropertySelection(properties, updated, selection.getKey(), selection.getValue());
+        }
+
+        if (applyChanges) {
+            pem.setPresentationElementProperties(target, pm);
+        }
+        if (applyChanges && resetLabels && target instanceof PathElement) {
+            pem.resetLabelPositions((PathElement) target);
+        }
+
+        JsonObject response = new JsonObject();
+        response.addProperty("presentationId", target.getID());
+        if (target.getElement() != null) {
+            response.addProperty("elementId", target.getElement().getID());
+            response.addProperty("elementType", target.getElement().getHumanType());
+        }
+        response.addProperty("applied", applyChanges);
+        response.addProperty("resetLabels", resetLabels && target instanceof PathElement);
+        response.add("updates", updated);
+        response.addProperty("resultCount", updated.size());
+        return response;
+    }
+
+    private void applyPropertySelection(
+            List<Property> properties,
+            JsonArray updated,
+            String requestKey,
+            PropertySelection selection) {
+        Set<String> seen = new LinkedHashSet<>();
+        for (Property property : properties) {
+            if (!matchesPropertySelection(property.getName(), selection)) {
+                continue;
+            }
+            String normalized = normalizePropertyKey(property.getName());
+            if (!seen.add(normalized)) {
+                continue;
+            }
+            setBooleanLikeProperty(property, selection.value);
+
+            JsonObject entry = new JsonObject();
+            entry.addProperty("request", requestKey);
+            entry.addProperty("property", property.getName());
+            addJsonValue(entry, "value", property.getValue());
+            entry.addProperty("set", true);
+            updated.add(entry);
+        }
+
+        if (seen.isEmpty()) {
+            JsonObject missing = new JsonObject();
+            missing.addProperty("request", requestKey);
+            missing.addProperty("error", "No matching presentation property found");
+            updated.add(missing);
+        }
+    }
+
+    private boolean matchesPropertySelection(String propertyName, PropertySelection selection) {
+        String normalized = normalizePropertyKey(propertyName);
+        for (String exactName : selection.exactNames) {
+            if (normalizePropertyKey(exactName).equals(normalized)) {
+                return true;
+            }
+        }
+        for (String containsToken : selection.containsNormalizedTokens) {
+            if (normalized.contains(containsToken)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void setBooleanLikeProperty(Property property, boolean value) {
+        String normalized = normalizePropertyKey(property.getName());
+        if (normalized.startsWith("suppress")) {
+            property.setValue(!value);
+            return;
+        }
+        property.setValue(value);
+    }
+
+    private List<PresentationElement> selectPresentationElements(
+            List<PresentationElement> roots,
+            List<String> requestedIds,
+            Predicate<PresentationElement> predicate) {
+        List<PresentationElement> flattened = new ArrayList<>();
+        collectPresentationElements(roots, flattened);
+
+        if (requestedIds != null && !requestedIds.isEmpty()) {
+            Map<String, PresentationElement> byId = new LinkedHashMap<>();
+            for (PresentationElement pe : flattened) {
+                byId.put(pe.getID(), pe);
+            }
+            List<PresentationElement> selected = new ArrayList<>();
+            for (String presentationId : requestedIds) {
+                PresentationElement target = byId.get(presentationId);
+                if (target != null && predicate.test(target)) {
+                    selected.add(target);
+                }
+            }
+            return selected;
+        }
+
+        List<PresentationElement> selected = new ArrayList<>();
+        for (PresentationElement pe : flattened) {
+            if (predicate.test(pe)) {
+                selected.add(pe);
+            }
+        }
+        return selected;
+    }
+
+    private void collectPresentationElements(
+            List<PresentationElement> elements,
+            List<PresentationElement> sink) {
+        if (elements == null) {
+            return;
+        }
+        for (PresentationElement pe : elements) {
+            sink.add(pe);
+            collectPresentationElements(pe.getPresentationElements(), sink);
+        }
+    }
+
+    private boolean isTransitionPathPresentation(PresentationElement pe) {
+        return pe instanceof PathElement && presentationElementMatches(pe, "transition");
+    }
+
+    private boolean isItemFlowPathPresentation(PresentationElement pe) {
+        return pe instanceof PathElement
+                && (presentationElementMatches(pe, "informationflow")
+                || presentationElementMatches(pe, "itemflow"));
+    }
+
+    private boolean isAllocationCompartmentCandidate(PresentationElement pe) {
+        return pe instanceof ShapeElement && targetHasAllocationProperties(pe);
+    }
+
+    private boolean targetHasAllocationProperties(PresentationElement pe) {
+        try {
+            PropertyManager pm = pe.getPropertyManager();
+            @SuppressWarnings("unchecked")
+            List<Property> properties = pm.getProperties();
+            for (Property property : properties) {
+                String normalized = normalizePropertyKey(property.getName());
+                if (normalized.contains("allocatedelements")
+                        || normalized.contains("allocatedfrom")
+                        || normalized.contains("allocationcompartmentnaming")
+                        || normalized.contains("showelementproperties")
+                        || normalized.contains("showfullports")
+                        || normalized.contains("suppressfullports")) {
+                    return true;
+                }
+            }
+        } catch (Exception e) {
+            LOG.log(Level.FINE, "Could not inspect allocation-related shape properties", e);
+        }
+        return false;
+    }
+
+    private boolean targetSupportsAnySelection(
+            PresentationElement target,
+            Map<String, PropertySelection> selections) {
+        try {
+            PropertyManager pm = target.getPropertyManager();
+            @SuppressWarnings("unchecked")
+            List<Property> properties = pm.getProperties();
+            for (Property property : properties) {
+                for (PropertySelection selection : selections.values()) {
+                    if (matchesPropertySelection(property.getName(), selection)) {
+                        return true;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            LOG.log(Level.FINE, "Could not inspect presentation properties", e);
+        }
+        return false;
+    }
+
+    private Map<String, PropertySelection> buildSelectionMap(
+            boolean value,
+            List<String> canonicalKeys) {
+        Map<String, PropertySelection> selections = new LinkedHashMap<>();
+        for (String key : canonicalKeys) {
+            selections.put(key, selectionForCanonicalKey(key, value));
+        }
+        return selections;
+    }
+
+    private PropertySelection selectionForCanonicalKey(String canonicalKey, boolean value) {
+        String normalized = normalizePropertyKey(canonicalKey);
+        switch (normalized) {
+            case "showname":
+                return new PropertySelection(value, List.of("Show Name"), List.of("showname"));
+            case "showstereotype":
+                return new PropertySelection(value, List.of("Show Stereotype"), List.of("showstereotype"));
+            case "showtype":
+                return new PropertySelection(value, List.of("Show Type"), List.of("showtype"));
+            case "showtriggers":
+                return new PropertySelection(value, List.of("Show Triggers"), List.of("showtrigger", "showtriggers"));
+            case "showguard":
+                return new PropertySelection(value, List.of("Show Guard"), List.of("showguard"));
+            case "showeffect":
+                return new PropertySelection(value, List.of("Show Effect"), List.of("showeffect"));
+            case "showconveyed":
+                return new PropertySelection(value, List.of(), List.of("conveyed", "informationflow"));
+            case "showitemproperty":
+                return new PropertySelection(value, List.of(), List.of("itemproperty"));
+            case "showdirection":
+                return new PropertySelection(value, List.of(), List.of("showdirection", "direction"));
+            case "showproperties":
+                return new PropertySelection(value, List.of("Show Properties"), List.of("showproperties"));
+            case "showoperations":
+                return new PropertySelection(value, List.of("Show Operations", "Suppress Operations"),
+                        List.of("showoperations", "suppressoperations"));
+            case "showconstraints":
+                return new PropertySelection(value, List.of("Show Constraints"), List.of("showconstraints"));
+            case "showtaggedvalues":
+                return new PropertySelection(value, List.of("Show Tagged Values"),
+                        List.of("showtaggedvalues"));
+            case "showports":
+                return new PropertySelection(value, List.of("Show Ports"), List.of("showports"));
+            case "showattributes":
+                return new PropertySelection(value, List.of("Suppress Attributes"), List.of("suppressattributes"));
+            case "showelementproperties":
+                return new PropertySelection(value, List.of("Show Element Properties"),
+                        List.of("showelementproperties"));
+            case "showfullports":
+                return new PropertySelection(value, List.of("Show Full Ports", "Suppress Full Ports"),
+                        List.of("showfullports", "suppressfullports"));
+            case "showallocatedelements":
+                return new PropertySelection(value, List.of(), List.of("allocatedelements", "allocatedfrom"));
+            case "applyallocationnaming":
+                return new PropertySelection(value, List.of("Apply SysML 1.7 Allocation Compartment Naming"),
+                        List.of("allocationcompartmentnaming"));
+            default:
+                return new PropertySelection(value, List.of(canonicalKey), List.of(normalized));
+        }
+    }
+
+    private JsonObject buildBatchRepairReceipt(
+            String operation,
+            String diagramId,
+            String diagramType,
+            boolean dryRun,
+            int targetCount,
+            int updatedCount,
+            int resultCount) {
+        JsonObject receipt = new JsonObject();
+        receipt.addProperty("operation", operation);
+        receipt.addProperty("diagramId", diagramId);
+        receipt.addProperty("diagramType", diagramType);
+        receipt.addProperty("status", dryRun ? "preview" : "applied");
+        receipt.addProperty("dryRun", dryRun);
+        receipt.addProperty("targetCount", targetCount);
+        receipt.addProperty("updatedCount", updatedCount);
+        receipt.addProperty("resultCount", resultCount);
+        return receipt;
+    }
+
+    private JsonObject buildRepairReceipt(
+            String operation,
+            String diagramId,
+            String diagramType,
+            String presentationId,
+            boolean applied,
+            boolean resetLabels,
+            JsonObject resultEntry) {
+        JsonObject receipt = new JsonObject();
+        receipt.addProperty("operation", operation);
+        receipt.addProperty("diagramId", diagramId);
+        receipt.addProperty("diagramType", diagramType);
+        receipt.addProperty("presentationId", presentationId);
+        receipt.addProperty("status", applied ? "applied" : "preview");
+        receipt.addProperty("applied", applied);
+        receipt.addProperty("resetLabels", resetLabels);
+        receipt.addProperty("updateCount", resultEntry != null && resultEntry.has("updates")
+                ? resultEntry.getAsJsonArray("updates").size()
+                : 0);
+        return receipt;
+    }
+
+    private int countUpdatedTargets(JsonArray results) {
+        int count = 0;
+        for (JsonElement element : results) {
+            if (!element.isJsonObject()) {
+                continue;
+            }
+            JsonObject entry = element.getAsJsonObject();
+            if (entry.has("error")) {
+                continue;
+            }
+            if (entry.has("updates") && entry.get("updates").isJsonArray()
+                    && entry.getAsJsonArray("updates").size() > 0) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private List<PresentationElement> selectOverlappingPathTargets(
+            List<PresentationElement> targets,
+            int overlapPadding) {
+        if (targets == null || targets.size() < 2) {
+            return targets == null ? List.of() : targets;
+        }
+
+        Map<String, Rectangle> boundsById = new LinkedHashMap<>();
+        for (PresentationElement target : targets) {
+            try {
+                Rectangle bounds = target.getBounds();
+                if (bounds != null) {
+                    boundsById.put(target.getID(), new Rectangle(bounds));
+                }
+            } catch (Exception e) {
+                LOG.log(Level.FINE, "Could not inspect path bounds for overlap", e);
+            }
+        }
+
+        if (boundsById.size() < 2) {
+            return List.of();
+        }
+
+        Set<String> selectedIds = new LinkedHashSet<>();
+        List<Map.Entry<String, Rectangle>> entries = new ArrayList<>(boundsById.entrySet());
+        for (int i = 0; i < entries.size(); i++) {
+            Map.Entry<String, Rectangle> leftEntry = entries.get(i);
+            Rectangle leftBounds = new Rectangle(leftEntry.getValue());
+            leftBounds.grow(overlapPadding, overlapPadding);
+            for (int j = i + 1; j < entries.size(); j++) {
+                Map.Entry<String, Rectangle> rightEntry = entries.get(j);
+                if (leftBounds.intersects(rightEntry.getValue())
+                        || rightEntry.getValue().intersects(leftEntry.getValue())) {
+                    selectedIds.add(leftEntry.getKey());
+                    selectedIds.add(rightEntry.getKey());
+                }
+            }
+        }
+
+        List<PresentationElement> selected = new ArrayList<>();
+        for (PresentationElement target : targets) {
+            if (selectedIds.contains(target.getID())) {
+                selected.add(target);
+            }
+        }
+        return selected;
+    }
+
+    private String diagramTypeName(DiagramPresentationElement dpe) {
+        if (dpe == null || dpe.getDiagramType() == null || dpe.getDiagramType().getType() == null) {
+            return "";
+        }
+        return dpe.getDiagramType().getType();
+    }
+
+    static JsonObject describeRepairDefaults(String diagramType) {
+        RepairDefaults defaults = repairDefaultsForDiagramType(diagramType);
+        JsonObject json = new JsonObject();
+        json.addProperty("diagramType", defaults.diagramType);
+        json.addProperty("normalizedDiagramType", defaults.normalizedDiagramType);
+        json.addProperty("resetPathLabelsByDefault", defaults.resetPathLabelsByDefault);
+        json.add("shapeLabelKeys", toJsonArray(defaults.shapeLabelKeys));
+        json.add("pathLabelKeys", toJsonArray(defaults.pathLabelKeys));
+        json.add("conveyedItemKeys", toJsonArray(defaults.conveyedItemKeys));
+        json.add("compartmentKeys", toJsonArray(defaults.compartmentKeys));
+        return json;
+    }
+
+    private static JsonArray toJsonArray(List<String> values) {
+        JsonArray array = new JsonArray();
+        for (String value : values) {
+            array.add(value);
+        }
+        return array;
+    }
+
+    private static RepairDefaults repairDefaultsForDiagramType(String diagramType) {
+        String normalized = normalizeDiagramType(diagramType);
+        List<String> shapeLabelKeys = List.of("showName", "showStereotype");
+        List<String> pathLabelKeys = List.of("showName");
+        List<String> conveyedItemKeys = List.of("showConveyed", "showItemProperty", "showDirection");
+        List<String> compartmentKeys = List.of();
+        boolean resetPathLabelsByDefault = true;
+
+        if (normalized.contains("statemachine")) {
+            shapeLabelKeys = List.of("showName");
+            pathLabelKeys = List.of("showName", "showTriggers", "showGuard", "showEffect");
+            conveyedItemKeys = List.of("showName", "showConveyed", "showItemProperty", "showDirection");
+        } else if (normalized.contains("internalblock") || normalized.equals("ibd")) {
+            shapeLabelKeys = List.of("showName", "showStereotype");
+            pathLabelKeys = List.of("showName");
+            conveyedItemKeys = List.of("showConveyed", "showItemProperty", "showDirection", "showStereotype");
+            compartmentKeys = List.of("showPorts", "showFullPorts", "showElementProperties",
+                    "showAllocatedElements", "applyAllocationNaming");
+        } else if (normalized.contains("blockdefinition") || normalized.equals("bdd")
+                || normalized.contains("classdiagram")) {
+            shapeLabelKeys = List.of("showName", "showStereotype", "showType");
+            pathLabelKeys = List.of("showName");
+            compartmentKeys = List.of("showProperties", "showOperations", "showConstraints",
+                    "showTaggedValues", "showPorts", "showAttributes");
+        } else if (normalized.contains("requirement")) {
+            shapeLabelKeys = List.of("showName", "showStereotype", "showType");
+            pathLabelKeys = List.of("showName");
+            compartmentKeys = List.of("showConstraints", "showTaggedValues");
+        } else if (normalized.contains("usecase")) {
+            shapeLabelKeys = List.of("showName", "showStereotype");
+            pathLabelKeys = List.of();
+            compartmentKeys = List.of();
+        } else if (normalized.contains("activity")) {
+            shapeLabelKeys = List.of("showName", "showStereotype");
+            pathLabelKeys = List.of("showName");
+            compartmentKeys = List.of();
+        } else if (normalized.contains("sequence")) {
+            shapeLabelKeys = List.of("showName");
+            pathLabelKeys = List.of("showName");
+            compartmentKeys = List.of();
+        } else if (normalized.contains("component") || normalized.contains("deployment")
+                || normalized.contains("package") || normalized.contains("compositestructure")) {
+            shapeLabelKeys = List.of("showName", "showStereotype", "showType");
+            pathLabelKeys = List.of("showName");
+            compartmentKeys = List.of("showProperties", "showOperations", "showConstraints",
+                    "showTaggedValues", "showPorts", "showAttributes");
+        }
+
+        return new RepairDefaults(
+                diagramType == null ? "" : diagramType,
+                normalized,
+                shapeLabelKeys,
+                pathLabelKeys,
+                conveyedItemKeys,
+                compartmentKeys,
+                resetPathLabelsByDefault);
+    }
+
+    private static String normalizeDiagramType(String value) {
+        return value == null ? "" : value.replaceAll("[^A-Za-z0-9]", "").toLowerCase();
+    }
+
+    private boolean presentationElementMatches(PresentationElement pe, String token) {
+        if (pe == null) {
+            return false;
+        }
+        String normalizedToken = normalizePropertyKey(token);
+        String className = normalizePropertyKey(pe.getClass().getSimpleName());
+        if (className.contains(normalizedToken)) {
+            return true;
+        }
+        Element element = pe.getElement();
+        if (element == null) {
+            return false;
+        }
+        String humanType = normalizePropertyKey(element.getHumanType());
+        if (humanType.contains(normalizedToken)) {
+            return true;
+        }
+        Object classType = element.getClassType();
+        String runtimeType = normalizePropertyKey(
+                classType != null ? classType.toString() : "");
+        return runtimeType.contains(normalizedToken);
+    }
+
+    private boolean readBoolean(JsonObject body, String key, boolean defaultValue) {
+        if (body == null || !body.has(key) || body.get(key).isJsonNull()) {
+            return defaultValue;
+        }
+        return body.get(key).getAsBoolean();
     }
 
     /**
@@ -1286,6 +2205,48 @@ public class DiagramHandler implements HttpHandler {
                 return "SysML Parametric Diagram";
             default:
                 return input.trim();
+        }
+    }
+
+    private static final class PropertySelection {
+        private final boolean value;
+        private final List<String> exactNames;
+        private final List<String> containsNormalizedTokens;
+
+        private PropertySelection(
+                boolean value,
+                List<String> exactNames,
+                List<String> containsNormalizedTokens) {
+            this.value = value;
+            this.exactNames = exactNames;
+            this.containsNormalizedTokens = containsNormalizedTokens;
+        }
+    }
+
+    private static final class RepairDefaults {
+        private final String diagramType;
+        private final String normalizedDiagramType;
+        private final List<String> shapeLabelKeys;
+        private final List<String> pathLabelKeys;
+        private final List<String> conveyedItemKeys;
+        private final List<String> compartmentKeys;
+        private final boolean resetPathLabelsByDefault;
+
+        private RepairDefaults(
+                String diagramType,
+                String normalizedDiagramType,
+                List<String> shapeLabelKeys,
+                List<String> pathLabelKeys,
+                List<String> conveyedItemKeys,
+                List<String> compartmentKeys,
+                boolean resetPathLabelsByDefault) {
+            this.diagramType = diagramType;
+            this.normalizedDiagramType = normalizedDiagramType;
+            this.shapeLabelKeys = shapeLabelKeys;
+            this.pathLabelKeys = pathLabelKeys;
+            this.conveyedItemKeys = conveyedItemKeys;
+            this.compartmentKeys = compartmentKeys;
+            this.resetPathLabelsByDefault = resetPathLabelsByDefault;
         }
     }
 }

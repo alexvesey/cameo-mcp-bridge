@@ -38,6 +38,8 @@ public class HttpBridgeServer {
     }
 
     private void registerHandlers() {
+        server.createContext("/status", this::handleStatus);
+        server.createContext("/capabilities", this::handleCapabilities);
         server.createContext("/api/v1/status", this::handleStatus);
         server.createContext("/api/v1/capabilities", this::handleCapabilities);
         server.createContext("/api/v1/project", new ProjectHandler());

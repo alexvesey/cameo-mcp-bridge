@@ -4,6 +4,7 @@ import com.claude.cameo.bridge.HttpBridgeServer;
 import com.claude.cameo.bridge.util.EdtDispatcher;
 import com.claude.cameo.bridge.util.ElementSerializer;
 import com.claude.cameo.bridge.util.JsonHelper;
+import com.claude.cameo.bridge.util.TaggedValueCoercion;
 import com.nomagic.magicdraw.openapi.uml.ModelElementsManager;
 import com.nomagic.uml2.ext.magicdraw.classes.mdkernel.Comment;
 import com.nomagic.uml2.ext.magicdraw.classes.mdkernel.Classifier;
@@ -322,7 +323,11 @@ public class ElementMutationHandler implements HttpHandler {
             }
             int setCount = 0;
             for (String tagName : values.keySet()) {
-                Object tagValue = coerceJsonValue(values.get(tagName));
+                Object tagValue = TaggedValueCoercion.coerceForTag(
+                        project,
+                        stereo,
+                        tagName,
+                        values.get(tagName));
                 StereotypesHelper.setStereotypePropertyValue(element, stereo, tagName, tagValue);
                 setCount++;
             }

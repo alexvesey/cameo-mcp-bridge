@@ -7,17 +7,33 @@ from PIL import Image
 
 from cameo_mcp.server import (
     _mcp_result,
+    cameo_apply_proofing_patch_plan,
+    cameo_assemble_ppt_pdf,
+    cameo_build_cross_diagram_remediation_plan,
+    cameo_compare_expected_artifact_list,
+    cameo_detect_cross_diagram_inconsistencies,
     cameo_get_capabilities,
     cameo_get_diagram_image,
+    cameo_export_required_diagrams,
+    cameo_probe_bridge,
     cameo_list_diagram_types,
     cameo_list_diagram_shapes,
     cameo_list_matrix_kinds,
     cameo_list_methodology_packs,
+    cameo_normalize_compartment_presets,
+    cameo_proof_model_text,
+    cameo_repair_conveyed_item_labels,
+    cameo_repair_hidden_labels,
+    cameo_repair_label_positions,
     cameo_get_state_behaviors,
+    cameo_set_allocation_compartment_presentation,
+    cameo_set_item_flow_label_presentation,
+    cameo_set_transition_label_presentation,
     cameo_get_transition_triggers,
     mcp,
     cameo_set_state_behaviors,
     cameo_set_transition_trigger,
+    cameo_validate_assignment_package,
     cameo_verify_activity_flow_semantics,
     cameo_verify_cross_diagram_traceability,
     cameo_verify_diagram_visual,
@@ -86,7 +102,7 @@ class ToolSchemaAliasTests(unittest.TestCase):
 
 class ServerToolTests(unittest.IsolatedAsyncioTestCase):
     async def test_cameo_get_capabilities_returns_native_dict(self) -> None:
-        payload = {"pluginVersion": "2.1.0", "compatibility": {"clientCompatible": True}}
+        payload = {"pluginVersion": "2.3.0", "compatibility": {"clientCompatible": True}}
 
         with patch(
             "cameo_mcp.server.client.get_capabilities",
@@ -96,6 +112,18 @@ class ServerToolTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIs(result, payload)
         get_capabilities.assert_awaited_once_with()
+
+    async def test_cameo_probe_bridge_returns_native_dict(self) -> None:
+        payload = {"reachable": True, "preferredStatusPath": "/status"}
+
+        with patch(
+            "cameo_mcp.server.client.probe_bridge",
+            new=AsyncMock(return_value=payload),
+        ) as probe_bridge:
+            result = await cameo_probe_bridge()
+
+        self.assertIs(result, payload)
+        probe_bridge.assert_awaited_once_with()
 
     async def test_cameo_list_methodology_packs_returns_native_dict(self) -> None:
         payload = {"count": 1, "packs": [{"id": "oosem"}]}
@@ -221,6 +249,355 @@ class ServerToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("bounds", result["shapes"][0])
         self.assertNotIn("childCount", result["shapes"][0])
         list_diagram_shapes.assert_awaited_once_with("dia-1")
+
+    async def test_cameo_set_transition_label_presentation_wraps_client(self) -> None:
+        payload = {"resultCount": 1}
+
+        with patch(
+            "cameo_mcp.server.client.set_transition_label_presentation",
+            new=AsyncMock(return_value=payload),
+        ) as set_labels:
+            result = await cameo_set_transition_label_presentation(
+                "dia-1",
+                presentation_ids=["pe-1"],
+                show_name=True,
+                show_triggers=False,
+                show_guard=True,
+                show_effect=False,
+                reset_labels=True,
+            )
+
+        self.assertIs(result, payload)
+        set_labels.assert_awaited_once_with(
+            "dia-1",
+            presentation_ids=["pe-1"],
+            show_name=True,
+            show_triggers=False,
+            show_guard=True,
+            show_effect=False,
+            reset_labels=True,
+        )
+
+    async def test_cameo_set_item_flow_label_presentation_wraps_client(self) -> None:
+        payload = {"resultCount": 1}
+
+        with patch(
+            "cameo_mcp.server.client.set_item_flow_label_presentation",
+            new=AsyncMock(return_value=payload),
+        ) as set_labels:
+            result = await cameo_set_item_flow_label_presentation(
+                "dia-1",
+                presentation_ids=["pe-1"],
+                show_name=False,
+                show_conveyed=True,
+                show_item_property=False,
+                show_direction=True,
+                show_stereotype=True,
+                reset_labels=False,
+            )
+
+        self.assertIs(result, payload)
+        set_labels.assert_awaited_once_with(
+            "dia-1",
+            presentation_ids=["pe-1"],
+            show_name=False,
+            show_conveyed=True,
+            show_item_property=False,
+            show_direction=True,
+            show_stereotype=True,
+            reset_labels=False,
+        )
+
+    async def test_cameo_set_allocation_compartment_presentation_wraps_client(self) -> None:
+        payload = {"resultCount": 1}
+
+        with patch(
+            "cameo_mcp.server.client.set_allocation_compartment_presentation",
+            new=AsyncMock(return_value=payload),
+        ) as set_presentation:
+            result = await cameo_set_allocation_compartment_presentation(
+                "dia-1",
+                presentation_ids=["pe-1"],
+                show_allocated_elements=True,
+                show_element_properties=False,
+                show_ports=True,
+                show_full_ports=False,
+                apply_allocation_naming=True,
+            )
+
+        self.assertIs(result, payload)
+        set_presentation.assert_awaited_once_with(
+            "dia-1",
+            presentation_ids=["pe-1"],
+            show_allocated_elements=True,
+            show_element_properties=False,
+            show_ports=True,
+            show_full_ports=False,
+            apply_allocation_naming=True,
+        )
+
+    async def test_cameo_repair_hidden_labels_wraps_client(self) -> None:
+        payload = {"resultCount": 2}
+
+        with patch(
+            "cameo_mcp.server.client.repair_hidden_labels",
+            new=AsyncMock(return_value=payload),
+        ) as repair_hidden_labels:
+            result = await cameo_repair_hidden_labels(
+                "dia-1",
+                presentation_ids=["pe-1"],
+                dry_run=True,
+            )
+
+        self.assertIs(result, payload)
+        repair_hidden_labels.assert_awaited_once_with(
+            "dia-1",
+            presentation_ids=["pe-1"],
+            dry_run=True,
+        )
+
+    async def test_cameo_repair_label_positions_wraps_client(self) -> None:
+        payload = {"resultCount": 1}
+
+        with patch(
+            "cameo_mcp.server.client.repair_label_positions",
+            new=AsyncMock(return_value=payload),
+        ) as repair_label_positions:
+            result = await cameo_repair_label_positions(
+                "dia-1",
+                presentation_ids=["pe-1"],
+                dry_run=False,
+                only_overlapping=False,
+                overlap_padding=24,
+            )
+
+        self.assertIs(result, payload)
+        repair_label_positions.assert_awaited_once_with(
+            "dia-1",
+            presentation_ids=["pe-1"],
+            dry_run=False,
+            only_overlapping=False,
+            overlap_padding=24,
+        )
+
+    async def test_cameo_repair_conveyed_item_labels_wraps_client(self) -> None:
+        payload = {"resultCount": 1}
+
+        with patch(
+            "cameo_mcp.server.client.repair_conveyed_item_labels",
+            new=AsyncMock(return_value=payload),
+        ) as repair_item_labels:
+            result = await cameo_repair_conveyed_item_labels(
+                "dia-1",
+                presentation_ids=["pe-1"],
+                dry_run=True,
+                reset_labels=False,
+            )
+
+        self.assertIs(result, payload)
+        repair_item_labels.assert_awaited_once_with(
+            "dia-1",
+            presentation_ids=["pe-1"],
+            dry_run=True,
+            reset_labels=False,
+        )
+
+    async def test_cameo_normalize_compartment_presets_wraps_client(self) -> None:
+        payload = {"resultCount": 1}
+
+        with patch(
+            "cameo_mcp.server.client.normalize_compartment_presets",
+            new=AsyncMock(return_value=payload),
+        ) as normalize_compartment_presets:
+            result = await cameo_normalize_compartment_presets(
+                "dia-1",
+                presentation_ids=["pe-1"],
+                dry_run=True,
+            )
+
+        self.assertIs(result, payload)
+        normalize_compartment_presets.assert_awaited_once_with(
+            "dia-1",
+            presentation_ids=["pe-1"],
+            dry_run=True,
+        )
+
+    async def test_cameo_proof_model_text_wraps_module(self) -> None:
+        payload = {"ok": True, "summary": "No proofing issues detected."}
+
+        with patch(
+            "cameo_mcp.server.proof_model_text",
+            new=AsyncMock(return_value=payload),
+        ) as proof_model_text_fn:
+            result = await cameo_proof_model_text(
+                root_package_id="pkg-1",
+                requirement_ids=["req-1"],
+                auto_apply=True,
+            )
+
+        self.assertIs(result, payload)
+        proof_model_text_fn.assert_awaited_once_with(
+            root_package_id="pkg-1",
+            requirement_ids=["req-1"],
+            comment_ids=None,
+            state_ids=None,
+            transition_ids=None,
+            diagram_ids=None,
+            auto_apply=True,
+        )
+
+    async def test_cameo_apply_proofing_patch_plan_wraps_module(self) -> None:
+        payload = {"ok": True, "receiptCount": 1}
+
+        with patch(
+            "cameo_mcp.server.apply_proofing_patch_plan",
+            new=AsyncMock(return_value=payload),
+        ) as apply_patch_plan:
+            result = await cameo_apply_proofing_patch_plan({"operations": []})
+
+        self.assertIs(result, payload)
+        apply_patch_plan.assert_awaited_once_with({"operations": []})
+
+    async def test_cameo_validate_assignment_package_wraps_module(self) -> None:
+        payload = {"ready": True}
+
+        with patch(
+            "cameo_mcp.server.validate_assignment_package_live",
+            new=AsyncMock(return_value=payload),
+        ) as validate_assignment_package_live:
+            result = await cameo_validate_assignment_package(
+                "oosem",
+                recipe_id="logical_ibd",
+                root_package_id="pkg-1",
+            )
+
+        self.assertIs(result, payload)
+        validate_assignment_package_live.assert_awaited_once_with(
+            "oosem",
+            recipe_id="logical_ibd",
+            root_package_id="pkg-1",
+            current_artifacts=None,
+            expected_artifacts=None,
+        )
+
+    async def test_cameo_compare_expected_artifact_list_wraps_module(self) -> None:
+        payload = {"ready": False}
+
+        with patch(
+            "cameo_mcp.server.compare_against_expected_artifact_list",
+            return_value=payload,
+        ) as compare_expected_artifacts:
+            result = await cameo_compare_expected_artifact_list(
+                [{"key": "workspace", "kind": "Package", "name": "Workspace"}],
+                current_artifacts=[],
+            )
+
+        self.assertIs(result, payload)
+        compare_expected_artifacts.assert_called_once_with(
+            expected_artifacts=[{"key": "workspace", "kind": "Package", "name": "Workspace"}],
+            current_artifacts=[],
+        )
+
+    async def test_cameo_export_required_diagrams_wraps_module(self) -> None:
+        payload = {"readyToExport": True}
+
+        with patch(
+            "cameo_mcp.server.export_required_diagrams_live",
+            new=AsyncMock(return_value=payload),
+        ) as export_required_diagrams_live:
+            result = await cameo_export_required_diagrams(
+                "oosem",
+                recipe_id="logical_ibd",
+                root_package_id="pkg-1",
+                output_dir="/tmp/out",
+            )
+
+        self.assertIs(result, payload)
+        export_required_diagrams_live.assert_awaited_once_with(
+            "oosem",
+            recipe_id="logical_ibd",
+            root_package_id="pkg-1",
+            current_artifacts=None,
+            expected_artifacts=None,
+            export_format="png",
+            output_dir="/tmp/out",
+        )
+
+    async def test_cameo_assemble_ppt_pdf_wraps_module(self) -> None:
+        payload = {"ready": True}
+
+        with patch(
+            "cameo_mcp.server.assemble_ppt_pdf_live",
+            new=AsyncMock(return_value=payload),
+        ) as assemble_ppt_pdf_live:
+            result = await cameo_assemble_ppt_pdf(
+                "oosem",
+                recipe_id="logical_ibd",
+                root_package_id="pkg-1",
+                output_dir="/tmp/out",
+                title="Demo Deck",
+            )
+
+        self.assertIs(result, payload)
+        assemble_ppt_pdf_live.assert_awaited_once_with(
+            "oosem",
+            recipe_id="logical_ibd",
+            root_package_id="pkg-1",
+            current_artifacts=None,
+            expected_artifacts=None,
+            output_dir="/tmp/out",
+            title="Demo Deck",
+            pptx_name=None,
+            pdf_name=None,
+            export_format="png",
+        )
+
+    async def test_cameo_detect_cross_diagram_inconsistencies_wraps_module(self) -> None:
+        payload = {"ok": False, "patchPlan": {"mode": "preview"}}
+
+        with patch(
+            "cameo_mcp.server.detect_cross_diagram_inconsistencies_for_artifacts",
+            new=AsyncMock(return_value=payload),
+        ) as detect_cross_diagram:
+            result = await cameo_detect_cross_diagram_inconsistencies(
+                activity_diagram_id="act-1",
+                interface_block_ids=["if-1"],
+            )
+
+        self.assertIs(result, payload)
+        detect_cross_diagram.assert_awaited_once_with(
+            activity_diagram_id="act-1",
+            interface_block_ids=["if-1"],
+            ibd_diagram_id=None,
+            requirement_ids=None,
+            architecture_element_ids=None,
+            allow_shared_flow_property_names=None,
+            require_id=True,
+            require_measurement=True,
+            min_requirement_text_length=20,
+            max_partition_depth=1,
+            allow_stereotype_partition_labels=False,
+        )
+
+    async def test_cameo_build_cross_diagram_remediation_plan_wraps_module(self) -> None:
+        payload = {"ok": False, "patchPlan": {"mode": "preview"}}
+
+        with patch(
+            "cameo_mcp.server.build_cross_diagram_remediation_plan",
+            return_value=payload,
+        ) as build_cross_diagram_remediation_plan_fn:
+            result = await cameo_build_cross_diagram_remediation_plan(
+                activity_validation={"ok": False}
+            )
+
+        self.assertIs(result, payload)
+        build_cross_diagram_remediation_plan_fn.assert_called_once_with(
+            activity_validation={"ok": False},
+            port_validation=None,
+            requirement_validation=None,
+            trace_validation=None,
+            architecture_elements=None,
+        )
 
     async def test_cameo_list_diagram_shapes_can_return_summary_only(self) -> None:
         payload = {

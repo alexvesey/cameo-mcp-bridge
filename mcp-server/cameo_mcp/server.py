@@ -12,6 +12,10 @@ from PIL import Image
 from pydantic import AliasChoices, Field
 
 from cameo_mcp import client, verification
+from cameo_mcp.auto_remediation import (
+    build_cross_diagram_remediation_plan,
+    detect_cross_diagram_inconsistencies_for_artifacts,
+)
 from cameo_mcp.methodology import (
     execute_methodology_recipe,
     generate_review_packet,
@@ -19,6 +23,14 @@ from cameo_mcp.methodology import (
     get_workflow_guidance,
     list_methodology_packs,
     validate_methodology_recipe,
+)
+from cameo_mcp.proofing import apply_patch_plan as apply_proofing_patch_plan
+from cameo_mcp.proofing import proof_model_text
+from cameo_mcp.rubric_workflows import (
+    assemble_ppt_pdf_live,
+    compare_against_expected_artifact_list,
+    export_required_diagrams_live,
+    validate_assignment_package_live,
 )
 from cameo_mcp.semantic_validation import (
     verify_activity_flow_semantics_for_diagram,
@@ -280,6 +292,18 @@ async def cameo_get_capabilities() -> dict[str, Any]:
         JSON with endpoint groups, versions, and client compatibility fields.
     """
     result = await client.get_capabilities()
+    return _mcp_result(result)
+
+
+@mcp.tool()
+async def cameo_probe_bridge() -> dict[str, Any]:
+    """Probe common local bridge endpoints and report the preferred health paths.
+
+    Use this when a caller is unsure whether the bridge is exposed at `/status`
+    or `/api/v1/status`, or wants a concise machine-readable reachability check
+    before attempting model work.
+    """
+    result = await client.probe_bridge()
     return _mcp_result(result)
 
 
@@ -1198,6 +1222,188 @@ async def cameo_verify_cross_diagram_traceability(
 
 
 @mcp.tool()
+async def cameo_detect_cross_diagram_inconsistencies(
+    activity_diagram_id: Optional[str] = None,
+    interface_block_ids: Optional[list[str]] = None,
+    ibd_diagram_id: Optional[str] = None,
+    requirement_ids: Optional[list[str]] = None,
+    architecture_element_ids: Optional[list[str]] = None,
+    allow_shared_flow_property_names: Optional[list[str]] = None,
+    require_id: bool = True,
+    require_measurement: bool = True,
+    min_requirement_text_length: int = 20,
+    max_partition_depth: int = 1,
+    allow_stereotype_partition_labels: bool = False,
+) -> dict[str, Any]:
+    """Detect cross-diagram inconsistencies and return a previewable remediation plan.
+
+    This is the non-mutating semantic auto-remediation entry point. It reuses
+    the bridge-backed semantic validation helpers and then returns structured
+    receipts plus a `patchPlan.steps` preview the caller can inspect before any
+    future apply step.
+    """
+    result = await detect_cross_diagram_inconsistencies_for_artifacts(
+        activity_diagram_id=activity_diagram_id,
+        interface_block_ids=interface_block_ids,
+        ibd_diagram_id=ibd_diagram_id,
+        requirement_ids=requirement_ids,
+        architecture_element_ids=architecture_element_ids,
+        allow_shared_flow_property_names=allow_shared_flow_property_names,
+        require_id=require_id,
+        require_measurement=require_measurement,
+        min_requirement_text_length=min_requirement_text_length,
+        max_partition_depth=max_partition_depth,
+        allow_stereotype_partition_labels=allow_stereotype_partition_labels,
+    )
+    return _mcp_result(result)
+
+
+@mcp.tool()
+async def cameo_build_cross_diagram_remediation_plan(
+    activity_validation: Optional[dict[str, Any]] = None,
+    port_validation: Optional[dict[str, Any]] = None,
+    requirement_validation: Optional[dict[str, Any]] = None,
+    trace_validation: Optional[dict[str, Any]] = None,
+    architecture_elements: Optional[list[dict[str, Any]]] = None,
+) -> dict[str, Any]:
+    """Build a previewable remediation plan from existing validation payloads."""
+    result = build_cross_diagram_remediation_plan(
+        activity_validation=activity_validation,
+        port_validation=port_validation,
+        requirement_validation=requirement_validation,
+        trace_validation=trace_validation,
+        architecture_elements=architecture_elements,
+    )
+    return _mcp_result(result)
+
+
+@mcp.tool()
+async def cameo_proof_model_text(
+    root_package_id: Optional[str] = None,
+    requirement_ids: Optional[list[str]] = None,
+    comment_ids: Optional[list[str]] = None,
+    state_ids: Optional[list[str]] = None,
+    transition_ids: Optional[list[str]] = None,
+    diagram_ids: Optional[list[str]] = None,
+    auto_apply: bool = False,
+) -> dict[str, Any]:
+    """Proof model text across requirements, comments, states, transitions, and diagram labels.
+
+    Provide `root_package_id` for an opinionated package-wide sweep, or pass
+    explicit element/diagram IDs for narrower analysis. When `auto_apply=true`,
+    the tool applies safe rename/text edits through the bridge and returns
+    apply receipts alongside the proofing report.
+    """
+    result = await proof_model_text(
+        root_package_id=root_package_id,
+        requirement_ids=requirement_ids,
+        comment_ids=comment_ids,
+        state_ids=state_ids,
+        transition_ids=transition_ids,
+        diagram_ids=diagram_ids,
+        auto_apply=auto_apply,
+    )
+    return _mcp_result(result)
+
+
+@mcp.tool()
+async def cameo_apply_proofing_patch_plan(
+    patch_plan: dict[str, Any],
+) -> dict[str, Any]:
+    """Apply a previously generated proofing patch plan to the live model."""
+    result = await apply_proofing_patch_plan(patch_plan)
+    return _mcp_result(result)
+
+
+@mcp.tool()
+async def cameo_compare_expected_artifact_list(
+    expected_artifacts: list[dict[str, Any]],
+    current_artifacts: Optional[list[dict[str, Any]]] = None,
+) -> dict[str, Any]:
+    """Compare discovered/current artifacts against an expected rubric artifact list."""
+    result = compare_against_expected_artifact_list(
+        expected_artifacts=expected_artifacts,
+        current_artifacts=current_artifacts,
+    )
+    return _mcp_result(result)
+
+
+@mcp.tool()
+async def cameo_validate_assignment_package(
+    pack_id: str,
+    recipe_id: Optional[str] = None,
+    root_package_id: Optional[str] = None,
+    current_artifacts: Optional[list[dict[str, Any]]] = None,
+    expected_artifacts: Optional[list[dict[str, Any]]] = None,
+) -> dict[str, Any]:
+    """Validate a package or recipe scope against the methodology rubric."""
+    result = await validate_assignment_package_live(
+        pack_id,
+        recipe_id=recipe_id,
+        root_package_id=root_package_id,
+        current_artifacts=current_artifacts,
+        expected_artifacts=expected_artifacts,
+    )
+    return _mcp_result(result)
+
+
+@mcp.tool()
+async def cameo_export_required_diagrams(
+    pack_id: str,
+    recipe_id: Optional[str] = None,
+    root_package_id: Optional[str] = None,
+    current_artifacts: Optional[list[dict[str, Any]]] = None,
+    expected_artifacts: Optional[list[dict[str, Any]]] = None,
+    export_format: str = "png",
+    output_dir: Optional[str] = None,
+) -> dict[str, Any]:
+    """Plan or execute export of rubric-required diagrams.
+
+    Omit `output_dir` for a dry-run export queue. Provide it to write the
+    diagram images to disk.
+    """
+    result = await export_required_diagrams_live(
+        pack_id,
+        recipe_id=recipe_id,
+        root_package_id=root_package_id,
+        current_artifacts=current_artifacts,
+        expected_artifacts=expected_artifacts,
+        export_format=export_format,
+        output_dir=output_dir,
+    )
+    return _mcp_result(result)
+
+
+@mcp.tool()
+async def cameo_assemble_ppt_pdf(
+    pack_id: str,
+    recipe_id: Optional[str] = None,
+    root_package_id: Optional[str] = None,
+    current_artifacts: Optional[list[dict[str, Any]]] = None,
+    expected_artifacts: Optional[list[dict[str, Any]]] = None,
+    output_dir: Optional[str] = None,
+    title: Optional[str] = None,
+    pptx_name: Optional[str] = None,
+    pdf_name: Optional[str] = None,
+    export_format: str = "png",
+) -> dict[str, Any]:
+    """Plan or assemble a PPT/PDF package from rubric-required diagrams."""
+    result = await assemble_ppt_pdf_live(
+        pack_id,
+        recipe_id=recipe_id,
+        root_package_id=root_package_id,
+        current_artifacts=current_artifacts,
+        expected_artifacts=expected_artifacts,
+        output_dir=output_dir,
+        title=title,
+        pptx_name=pptx_name,
+        pdf_name=pdf_name,
+        export_format=export_format,
+    )
+    return _mcp_result(result)
+
+
+@mcp.tool()
 async def cameo_list_matrix_kinds() -> dict[str, Any]:
     """List the validated native matrix kinds and example type domains."""
     return {
@@ -1743,6 +1949,147 @@ async def cameo_set_shape_compartments(
         diagram_id=diagram_id,
         presentation_id=presentation_id,
         compartments=compartments,
+    )
+    return _mcp_result(result)
+
+
+@mcp.tool()
+async def cameo_set_transition_label_presentation(
+    diagram_id: DiagramIdArg,
+    presentation_ids: Optional[list[str]] = None,
+    show_name: bool = True,
+    show_triggers: bool = True,
+    show_guard: bool = False,
+    show_effect: bool = False,
+    reset_labels: bool = True,
+) -> dict[str, Any]:
+    """Apply a high-level transition-label display preset on one diagram.
+
+    This is safer than guessing raw Cameo property names when you want
+    transition names/triggers to render cleanly on state-machine diagrams.
+    """
+    result = await client.set_transition_label_presentation(
+        diagram_id,
+        presentation_ids=presentation_ids,
+        show_name=show_name,
+        show_triggers=show_triggers,
+        show_guard=show_guard,
+        show_effect=show_effect,
+        reset_labels=reset_labels,
+    )
+    return _mcp_result(result)
+
+
+@mcp.tool()
+async def cameo_set_item_flow_label_presentation(
+    diagram_id: DiagramIdArg,
+    presentation_ids: Optional[list[str]] = None,
+    show_name: bool = False,
+    show_conveyed: bool = True,
+    show_item_property: bool = True,
+    show_direction: bool = True,
+    show_stereotype: bool = False,
+    reset_labels: bool = True,
+) -> dict[str, Any]:
+    """Apply a high-level item-flow/information-flow label preset on one diagram."""
+    result = await client.set_item_flow_label_presentation(
+        diagram_id,
+        presentation_ids=presentation_ids,
+        show_name=show_name,
+        show_conveyed=show_conveyed,
+        show_item_property=show_item_property,
+        show_direction=show_direction,
+        show_stereotype=show_stereotype,
+        reset_labels=reset_labels,
+    )
+    return _mcp_result(result)
+
+
+@mcp.tool()
+async def cameo_set_allocation_compartment_presentation(
+    diagram_id: DiagramIdArg,
+    presentation_ids: Optional[list[str]] = None,
+    show_allocated_elements: bool = True,
+    show_element_properties: bool = True,
+    show_ports: bool = True,
+    show_full_ports: bool = True,
+    apply_allocation_naming: bool = True,
+) -> dict[str, Any]:
+    """Apply a high-level allocation/full-port display preset on one diagram."""
+    result = await client.set_allocation_compartment_presentation(
+        diagram_id,
+        presentation_ids=presentation_ids,
+        show_allocated_elements=show_allocated_elements,
+        show_element_properties=show_element_properties,
+        show_ports=show_ports,
+        show_full_ports=show_full_ports,
+        apply_allocation_naming=apply_allocation_naming,
+    )
+    return _mcp_result(result)
+
+
+@mcp.tool()
+async def cameo_repair_hidden_labels(
+    diagram_id: DiagramIdArg,
+    presentation_ids: Optional[list[str]] = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Auto-show hidden labels using diagram-type-aware native repair defaults."""
+    result = await client.repair_hidden_labels(
+        diagram_id,
+        presentation_ids=presentation_ids,
+        dry_run=dry_run,
+    )
+    return _mcp_result(result)
+
+
+@mcp.tool()
+async def cameo_repair_label_positions(
+    diagram_id: DiagramIdArg,
+    presentation_ids: Optional[list[str]] = None,
+    dry_run: bool = False,
+    only_overlapping: bool = True,
+    overlap_padding: int = 40,
+) -> dict[str, Any]:
+    """Reset likely-overlapping path labels to readable default positions."""
+    result = await client.repair_label_positions(
+        diagram_id,
+        presentation_ids=presentation_ids,
+        dry_run=dry_run,
+        only_overlapping=only_overlapping,
+        overlap_padding=overlap_padding,
+    )
+    return _mcp_result(result)
+
+
+@mcp.tool()
+async def cameo_repair_conveyed_item_labels(
+    diagram_id: DiagramIdArg,
+    presentation_ids: Optional[list[str]] = None,
+    dry_run: bool = False,
+    reset_labels: bool = True,
+) -> dict[str, Any]:
+    """Force conveyed-item labels and optional label resets on eligible paths."""
+    result = await client.repair_conveyed_item_labels(
+        diagram_id,
+        presentation_ids=presentation_ids,
+        dry_run=dry_run,
+        reset_labels=reset_labels,
+    )
+    return _mcp_result(result)
+
+
+@mcp.tool()
+async def cameo_normalize_compartment_presets(
+    diagram_id: DiagramIdArg,
+    presentation_ids: Optional[list[str]] = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Normalize compartment presets based on the diagram type."""
+    result = await client.normalize_compartment_presets(
+        diagram_id,
+        presentation_ids=presentation_ids,
+        dry_run=dry_run,
     )
     return _mcp_result(result)
 
