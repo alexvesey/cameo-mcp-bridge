@@ -14,6 +14,7 @@ import com.nomagic.magicdraw.uml.symbols.shapes.ShapeElement;
 import com.nomagic.magicdraw.uml.symbols.paths.PathElement;
 import com.nomagic.magicdraw.properties.PropertyManager;
 import com.nomagic.magicdraw.properties.Property;
+import com.nomagic.uml2.ext.magicdraw.classes.mdkernel.Comment;
 import com.nomagic.uml2.ext.magicdraw.classes.mdkernel.Diagram;
 import com.nomagic.uml2.ext.magicdraw.classes.mdkernel.Element;
 import com.nomagic.uml2.ext.magicdraw.classes.mdkernel.NamedElement;
@@ -910,7 +911,11 @@ public class DiagramHandler implements HttpHandler {
             }
 
             PresentationElementsManager pem = PresentationElementsManager.getInstance();
-            pem.setPresentationElementProperties(target, pm);
+            applyPresentationPropertiesOrThrow(
+                    pem,
+                    target,
+                    pm,
+                    "Failed to apply shape properties to presentation " + peId);
 
             JsonObject response = new JsonObject();
             response.addProperty("diagramId", diagramId);
@@ -977,7 +982,11 @@ public class DiagramHandler implements HttpHandler {
                 updated.add(entry);
             }
 
-            PresentationElementsManager.getInstance().setPresentationElementProperties(target, pm);
+            applyPresentationPropertiesOrThrow(
+                    PresentationElementsManager.getInstance(),
+                    target,
+                    pm,
+                    "Failed to apply shape compartments to presentation " + peId);
 
             JsonObject response = new JsonObject();
             response.addProperty("diagramId", diagramId);
@@ -1011,19 +1020,21 @@ public class DiagramHandler implements HttpHandler {
             DiagramPresentationElement dpe = findDiagramById(project, diagramId);
             dpe.ensureLoaded();
 
-            List<PresentationElement> targets = selectPresentationElements(
+            PresentationSelection selection = selectPresentationElementsWithErrors(
                     dpe.getPresentationElements(),
                     presentationIds,
-                    this::isTransitionPathPresentation);
+                    this::isTransitionPathPresentation,
+                    "Presentation element is not a transition path");
 
             PresentationElementsManager pem = PresentationElementsManager.getInstance();
             JsonArray results = new JsonArray();
+            appendResults(results, selection.errors);
             Map<String, PropertySelection> selections = new LinkedHashMap<>();
             selections.put("showName", new PropertySelection(showName, List.of("Show Name"), List.of("showname")));
             selections.put("showTriggers", new PropertySelection(showTriggers, List.of(), List.of("showtrigger", "showtriggers")));
             selections.put("showGuard", new PropertySelection(showGuard, List.of(), List.of("showguard")));
             selections.put("showEffect", new PropertySelection(showEffect, List.of(), List.of("showeffect")));
-            for (PresentationElement target : targets) {
+            for (PresentationElement target : selection.targets) {
                 results.add(configurePresentationProperties(target, pem, selections, resetLabels));
             }
 
@@ -1058,20 +1069,22 @@ public class DiagramHandler implements HttpHandler {
             DiagramPresentationElement dpe = findDiagramById(project, diagramId);
             dpe.ensureLoaded();
 
-            List<PresentationElement> targets = selectPresentationElements(
+            PresentationSelection selection = selectPresentationElementsWithErrors(
                     dpe.getPresentationElements(),
                     presentationIds,
-                    this::isItemFlowPathPresentation);
+                    this::isItemFlowPathPresentation,
+                    "Presentation element is not an information-flow path");
 
             PresentationElementsManager pem = PresentationElementsManager.getInstance();
             JsonArray results = new JsonArray();
+            appendResults(results, selection.errors);
             Map<String, PropertySelection> selections = new LinkedHashMap<>();
             selections.put("showName", new PropertySelection(showName, List.of("Show Name"), List.of("showname")));
             selections.put("showConveyed", new PropertySelection(showConveyed, List.of(), List.of("conveyed", "informationflow")));
             selections.put("showItemProperty", new PropertySelection(showItemProperty, List.of(), List.of("itemproperty")));
             selections.put("showDirection", new PropertySelection(showDirection, List.of(), List.of("showdirection", "direction")));
             selections.put("showStereotype", new PropertySelection(showStereotype, List.of("Show Stereotype"), List.of("showstereotype")));
-            for (PresentationElement target : targets) {
+            for (PresentationElement target : selection.targets) {
                 results.add(configurePresentationProperties(target, pem, selections, resetLabels));
             }
 
@@ -1105,13 +1118,15 @@ public class DiagramHandler implements HttpHandler {
             DiagramPresentationElement dpe = findDiagramById(project, diagramId);
             dpe.ensureLoaded();
 
-            List<PresentationElement> targets = selectPresentationElements(
+            PresentationSelection selection = selectPresentationElementsWithErrors(
                     dpe.getPresentationElements(),
                     presentationIds,
-                    this::isAllocationCompartmentCandidate);
+                    this::isAllocationCompartmentCandidate,
+                    "Presentation element does not support allocation compartments");
 
             PresentationElementsManager pem = PresentationElementsManager.getInstance();
             JsonArray results = new JsonArray();
+            appendResults(results, selection.errors);
             Map<String, PropertySelection> selections = new LinkedHashMap<>();
             selections.put("showAllocatedElements", new PropertySelection(
                     showAllocatedElements,
@@ -1133,7 +1148,7 @@ public class DiagramHandler implements HttpHandler {
                     applyAllocationNaming,
                     List.of("Apply SysML 1.7 Allocation Compartment Naming"),
                     List.of("allocationcompartmentnaming")));
-            for (PresentationElement target : targets) {
+            for (PresentationElement target : selection.targets) {
                 results.add(configurePresentationProperties(target, pem, selections, false));
             }
 
@@ -1167,19 +1182,19 @@ public class DiagramHandler implements HttpHandler {
                     true,
                     defaults.hiddenLabelKeys);
 
-            List<PresentationElement> targets = selectPresentationElements(
+            PresentationSelection selection = selectPresentationElementsWithErrors(
                     dpe.getPresentationElements(),
                     presentationIds,
-                    target -> targetSupportsAnySelection(target, selections));
+                    target -> targetSupportsAnySelection(target, selections),
+                    "Presentation element does not support hidden-label repair");
 
             PresentationElementsManager pem = PresentationElementsManager.getInstance();
             JsonArray results = new JsonArray();
-            for (PresentationElement target : targets) {
+            appendResults(results, selection.errors);
+            for (PresentationElement target : selection.targets) {
                 JsonObject entry = configurePresentationProperties(
                         target, pem, selections, false, !dryRun);
                 entry.addProperty("repairMode", "hidden-labels");
-                entry.addProperty("applied", !dryRun);
-                entry.addProperty("status", dryRun ? "preview" : "applied");
                 entry.add("receipt", buildRepairReceipt(
                         "repairHiddenLabels",
                         diagramId,
@@ -1204,9 +1219,10 @@ public class DiagramHandler implements HttpHandler {
                     diagramId,
                     diagramType,
                     dryRun,
-                    targets.size(),
+                    selection.totalRequestedCount(),
                     countUpdatedTargets(results),
-                    results.size()));
+                    results.size(),
+                    countErrorTargets(results)));
             return response;
         });
 
@@ -1227,25 +1243,50 @@ public class DiagramHandler implements HttpHandler {
             dpe.ensureLoaded();
 
             String diagramType = diagramTypeName(dpe);
-            List<PresentationElement> targets = selectPresentationElements(
+            PresentationSelection selection = selectPresentationElementsWithErrors(
                     dpe.getPresentationElements(),
                     presentationIds,
-                    pe -> pe instanceof PathElement);
+                    pe -> pe instanceof PathElement,
+                    "Presentation element is not a path");
+            List<PresentationElement> targets = selection.targets;
             if (onlyOverlapping) {
                 targets = selectOverlappingPathTargets(targets, overlapPadding);
             }
 
             PresentationElementsManager pem = PresentationElementsManager.getInstance();
             JsonArray results = new JsonArray();
+            appendResults(results, selection.errors);
             for (PresentationElement target : targets) {
                 JsonObject entry = new JsonObject();
                 entry.addProperty("presentationId", target.getID());
                 entry.addProperty("elementType", target.getElement() != null
                         ? target.getElement().getHumanType() : "");
                 entry.addProperty("overlapCandidate", true);
-                entry.addProperty("applied", !dryRun);
-                if (!dryRun) {
-                    pem.resetLabelPositions((PathElement) target);
+                entry.addProperty("requestedResetLabels", true);
+                entry.addProperty("repairMode", "label-positions");
+                if (dryRun) {
+                    entry.addProperty("applied", false);
+                    entry.addProperty("updated", true);
+                    entry.addProperty("status", "preview");
+                    entry.addProperty("resetLabels", false);
+                    entry.addProperty("labelsReset", false);
+                } else {
+                    try {
+                        pem.resetLabelPositions((PathElement) target);
+                        entry.addProperty("applied", true);
+                        entry.addProperty("updated", true);
+                        entry.addProperty("status", "applied");
+                        entry.addProperty("resetLabels", true);
+                        entry.addProperty("labelsReset", true);
+                    } catch (Exception e) {
+                        entry.addProperty("applied", false);
+                        entry.addProperty("updated", false);
+                        entry.addProperty("status", "error");
+                        entry.addProperty("resetLabels", false);
+                        entry.addProperty("labelsReset", false);
+                        entry.addProperty("error",
+                                "Failed to reset label positions: " + safeMessage(e));
+                    }
                 }
                 JsonObject receipt = new JsonObject();
                 receipt.addProperty("operation", "repairLabelPositions");
@@ -1254,7 +1295,8 @@ public class DiagramHandler implements HttpHandler {
                 receipt.addProperty("presentationId", target.getID());
                 receipt.addProperty("onlyOverlapping", onlyOverlapping);
                 receipt.addProperty("overlapPadding", overlapPadding);
-                receipt.addProperty("status", dryRun ? "preview" : "applied");
+                receipt.addProperty("status", entry.get("status").getAsString());
+                receipt.addProperty("updated", entry.get("updated").getAsBoolean());
                 entry.add("receipt", receipt);
                 results.add(entry);
             }
@@ -1267,15 +1309,17 @@ public class DiagramHandler implements HttpHandler {
             response.addProperty("onlyOverlapping", onlyOverlapping);
             response.addProperty("overlapPadding", overlapPadding);
             response.addProperty("resultCount", results.size());
+            response.addProperty("updatedCount", countUpdatedTargets(results));
             response.add("results", results);
             response.add("receipt", buildBatchRepairReceipt(
                     "repairLabelPositions",
                     diagramId,
                     diagramType,
                     dryRun,
-                    targets.size(),
+                    targets.size() + selection.errors.size(),
                     countUpdatedTargets(results),
-                    results.size()));
+                    results.size(),
+                    countErrorTargets(results)));
             return response;
         });
 
@@ -1300,19 +1344,19 @@ public class DiagramHandler implements HttpHandler {
                     false,
                     defaults.conveyedItemKeys);
 
-            List<PresentationElement> targets = selectPresentationElements(
+            PresentationSelection selection = selectPresentationElementsWithErrors(
                     dpe.getPresentationElements(),
                     presentationIds,
-                    target -> target instanceof PathElement && targetSupportsAnySelection(target, selections));
+                    target -> target instanceof PathElement && targetSupportsAnySelection(target, selections),
+                    "Presentation element does not support conveyed-item labels");
 
             PresentationElementsManager pem = PresentationElementsManager.getInstance();
             JsonArray results = new JsonArray();
-            for (PresentationElement target : targets) {
+            appendResults(results, selection.errors);
+            for (PresentationElement target : selection.targets) {
                 JsonObject entry = configurePresentationProperties(
                         target, pem, selections, resetLabels, !dryRun);
                 entry.addProperty("repairMode", "conveyed-item-labels");
-                entry.addProperty("applied", !dryRun);
-                entry.addProperty("status", dryRun ? "preview" : "applied");
                 entry.add("receipt", buildRepairReceipt(
                         "repairConveyedItemLabels",
                         diagramId,
@@ -1338,9 +1382,10 @@ public class DiagramHandler implements HttpHandler {
                     diagramId,
                     diagramType,
                     dryRun,
-                    targets.size(),
+                    selection.totalRequestedCount(),
                     countUpdatedTargets(results),
-                    results.size()));
+                    results.size(),
+                    countErrorTargets(results)));
             return response;
         });
 
@@ -1364,20 +1409,21 @@ public class DiagramHandler implements HttpHandler {
                     true,
                     defaults.compartmentKeys);
 
-            List<PresentationElement> targets = selectPresentationElements(
+            PresentationSelection selection = selectPresentationElementsWithErrors(
                     dpe.getPresentationElements(),
                     presentationIds,
                     target -> target instanceof ShapeElement
-                            && targetSupportsAnySelection(target, selections));
+                            && !isCommentLikePresentation(target)
+                            && targetSupportsAnySelection(target, selections),
+                    "Presentation element does not support compartment normalization");
 
             PresentationElementsManager pem = PresentationElementsManager.getInstance();
             JsonArray results = new JsonArray();
-            for (PresentationElement target : targets) {
+            appendResults(results, selection.errors);
+            for (PresentationElement target : selection.targets) {
                 JsonObject entry = configurePresentationProperties(
                         target, pem, selections, false, !dryRun);
                 entry.addProperty("repairMode", "compartment-presets");
-                entry.addProperty("applied", !dryRun);
-                entry.addProperty("status", dryRun ? "preview" : "applied");
                 entry.add("receipt", buildRepairReceipt(
                         "normalizeCompartmentPresets",
                         diagramId,
@@ -1402,9 +1448,10 @@ public class DiagramHandler implements HttpHandler {
                     diagramId,
                     diagramType,
                     dryRun,
-                    targets.size(),
+                    selection.totalRequestedCount(),
                     countUpdatedTargets(results),
-                    results.size()));
+                    results.size(),
+                    countErrorTargets(results)));
             return response;
         });
 
@@ -1454,13 +1501,24 @@ public class DiagramHandler implements HttpHandler {
                 boolean resetLabels = !routeReq.has("resetLabels")
                         || routeReq.get("resetLabels").getAsBoolean();
 
-                if (sourcePoint != null || targetPoint != null) {
-                    pem.changePathPoints(path, sourcePoint, targetPoint, breakPoints);
-                } else {
-                    pem.changePathBreakPoints(path, breakPoints);
-                }
-                if (resetLabels) {
-                    pem.resetLabelPositions(path);
+                try {
+                    if (sourcePoint != null || targetPoint != null) {
+                        pem.changePathPoints(path, sourcePoint, targetPoint, breakPoints);
+                    } else {
+                        pem.changePathBreakPoints(path, breakPoints);
+                    }
+                    if (resetLabels) {
+                        resetLabelPositionsOrThrow(
+                                pem,
+                                path,
+                                "Failed to reset label positions for presentation " + presentationId);
+                    }
+                } catch (Exception e) {
+                    entry.addProperty("status", "error");
+                    entry.addProperty("updated", false);
+                    entry.addProperty("error", safeMessage(e));
+                    results.add(entry);
+                    continue;
                 }
 
                 entry.addProperty("routed", true);
@@ -1503,16 +1561,68 @@ public class DiagramHandler implements HttpHandler {
         @SuppressWarnings("unchecked")
         List<Property> properties = pm.getProperties();
         JsonArray updated = new JsonArray();
+        JsonArray supportedRequests = new JsonArray();
+        JsonArray unsupportedRequests = new JsonArray();
+        JsonArray errors = new JsonArray();
 
         for (Map.Entry<String, PropertySelection> selection : selections.entrySet()) {
             applyPropertySelection(properties, updated, selection.getKey(), selection.getValue());
         }
 
-        if (applyChanges) {
-            pem.setPresentationElementProperties(target, pm);
+        for (JsonElement element : updated) {
+            if (!element.isJsonObject()) {
+                continue;
+            }
+            JsonObject entry = element.getAsJsonObject();
+            if (!entry.has("request")) {
+                continue;
+            }
+            String request = entry.get("request").getAsString();
+            if (entry.has("set") && entry.get("set").getAsBoolean()) {
+                supportedRequests.add(request);
+            } else if (entry.has("error")) {
+                unsupportedRequests.add(request);
+            }
         }
-        if (applyChanges && resetLabels && target instanceof PathElement) {
-            pem.resetLabelPositions((PathElement) target);
+
+        boolean requestedResetLabels = resetLabels && target instanceof PathElement;
+        boolean propertyChangesApplied = false;
+        boolean labelsReset = false;
+
+        if (applyChanges) {
+            if (supportedRequests.size() > 0) {
+                try {
+                    pem.setPresentationElementProperties(target, pm);
+                    propertyChangesApplied = true;
+                } catch (Exception e) {
+                    errors.add("Failed to apply presentation properties: " + safeMessage(e));
+                }
+            }
+        }
+        if (applyChanges && requestedResetLabels) {
+            try {
+                pem.resetLabelPositions((PathElement) target);
+                labelsReset = true;
+            } catch (Exception e) {
+                errors.add("Failed to reset label positions: " + safeMessage(e));
+            }
+        }
+
+        boolean unsupportedRequestsPresent = unsupportedRequests.size() > 0;
+        boolean updatedFlag = !applyChanges
+                ? (supportedRequests.size() > 0 || requestedResetLabels)
+                : (propertyChangesApplied || labelsReset);
+        String status;
+        if (!applyChanges) {
+            status = "preview";
+        } else if (errors.size() == 0 && unsupportedRequestsPresent) {
+            status = updatedFlag ? "partial" : "error";
+        } else if (errors.size() == 0) {
+            status = "applied";
+        } else if (updatedFlag) {
+            status = "partial";
+        } else {
+            status = "error";
         }
 
         JsonObject response = new JsonObject();
@@ -1521,11 +1631,44 @@ public class DiagramHandler implements HttpHandler {
             response.addProperty("elementId", target.getElement().getID());
             response.addProperty("elementType", target.getElement().getHumanType());
         }
-        response.addProperty("applied", applyChanges);
-        response.addProperty("resetLabels", resetLabels && target instanceof PathElement);
+        response.addProperty("applied", applyChanges && updatedFlag);
+        response.addProperty("fullyApplied", applyChanges && errors.size() == 0 && !unsupportedRequestsPresent);
+        response.addProperty("status", status);
+        response.addProperty("updated", updatedFlag);
+        response.addProperty("requestedResetLabels", requestedResetLabels);
+        response.addProperty("resetLabels", labelsReset);
+        response.addProperty("labelsReset", labelsReset);
+        response.add("supportedRequests", supportedRequests);
+        response.add("unsupportedRequests", unsupportedRequests);
         response.add("updates", updated);
+        if (errors.size() > 0) {
+            response.add("errors", errors);
+        }
         response.addProperty("resultCount", updated.size());
         return response;
+    }
+
+    private void applyPresentationPropertiesOrThrow(
+            PresentationElementsManager pem,
+            PresentationElement target,
+            PropertyManager pm,
+            String message) {
+        try {
+            pem.setPresentationElementProperties(target, pm);
+        } catch (Exception e) {
+            throw new IllegalStateException(message + ": " + safeMessage(e), e);
+        }
+    }
+
+    private void resetLabelPositionsOrThrow(
+            PresentationElementsManager pem,
+            PathElement path,
+            String message) {
+        try {
+            pem.resetLabelPositions(path);
+        } catch (Exception e) {
+            throw new IllegalStateException(message + ": " + safeMessage(e), e);
+        }
     }
 
     private void applyPropertySelection(
@@ -1627,6 +1770,40 @@ public class DiagramHandler implements HttpHandler {
         }
     }
 
+    private PresentationSelection selectPresentationElementsWithErrors(
+            List<PresentationElement> roots,
+            List<String> requestedIds,
+            Predicate<PresentationElement> predicate,
+            String unsupportedMessage) {
+        List<PresentationElement> flattened = new ArrayList<>();
+        collectPresentationElements(roots, flattened);
+
+        if (requestedIds == null || requestedIds.isEmpty()) {
+            return new PresentationSelection(selectPresentationElements(roots, null, predicate), new JsonArray());
+        }
+
+        Map<String, PresentationElement> byId = new LinkedHashMap<>();
+        for (PresentationElement pe : flattened) {
+            byId.put(pe.getID(), pe);
+        }
+
+        List<PresentationElement> selected = new ArrayList<>();
+        JsonArray errors = new JsonArray();
+        for (String presentationId : requestedIds) {
+            PresentationElement target = byId.get(presentationId);
+            if (target == null) {
+                errors.add(buildSelectionError(presentationId, "Presentation element not found"));
+                continue;
+            }
+            if (!predicate.test(target)) {
+                errors.add(buildSelectionError(presentationId, unsupportedMessage));
+                continue;
+            }
+            selected.add(target);
+        }
+        return new PresentationSelection(selected, errors);
+    }
+
     private boolean isTransitionPathPresentation(PresentationElement pe) {
         return pe instanceof PathElement && presentationElementMatches(pe, "transition");
     }
@@ -1638,7 +1815,20 @@ public class DiagramHandler implements HttpHandler {
     }
 
     private boolean isAllocationCompartmentCandidate(PresentationElement pe) {
-        return pe instanceof ShapeElement && targetHasAllocationProperties(pe);
+        return pe instanceof ShapeElement
+                && !isCommentLikePresentation(pe)
+                && targetHasAllocationProperties(pe);
+    }
+
+    private boolean isCommentLikePresentation(PresentationElement pe) {
+        if (pe == null) {
+            return false;
+        }
+        if (presentationElementMatches(pe, "comment") || presentationElementMatches(pe, "note")) {
+            return true;
+        }
+        Element element = pe.getElement();
+        return element instanceof Comment;
     }
 
     private boolean targetHasAllocationProperties(PresentationElement pe) {
@@ -1703,11 +1893,17 @@ public class DiagramHandler implements HttpHandler {
             case "showtype":
                 return new PropertySelection(value, List.of("Show Type"), List.of("showtype"));
             case "showtriggers":
-                return new PropertySelection(value, List.of("Show Triggers"), List.of("showtrigger", "showtriggers"));
+                return new PropertySelection(value,
+                        List.of("Show Triggers", "Show Trigger", "Show Events", "Show Event"),
+                        List.of("showtrigger", "showtriggers", "showevent", "showevents"));
             case "showguard":
-                return new PropertySelection(value, List.of("Show Guard"), List.of("showguard"));
+                return new PropertySelection(value,
+                        List.of("Show Guard", "Show Guards", "Show Condition", "Show Conditions"),
+                        List.of("showguard", "showguards", "showcondition", "showconditions"));
             case "showeffect":
-                return new PropertySelection(value, List.of("Show Effect"), List.of("showeffect"));
+                return new PropertySelection(value,
+                        List.of("Show Effect", "Show Effects", "Show Action", "Show Actions"),
+                        List.of("showeffect", "showeffects", "showaction", "showactions"));
             case "showconveyed":
                 return new PropertySelection(value, List.of(), List.of("conveyed", "informationflow"));
             case "showitemproperty":
@@ -1751,7 +1947,8 @@ public class DiagramHandler implements HttpHandler {
             boolean dryRun,
             int targetCount,
             int updatedCount,
-            int resultCount) {
+            int resultCount,
+            int errorCount) {
         JsonObject receipt = new JsonObject();
         receipt.addProperty("operation", operation);
         receipt.addProperty("diagramId", diagramId);
@@ -1761,6 +1958,7 @@ public class DiagramHandler implements HttpHandler {
         receipt.addProperty("targetCount", targetCount);
         receipt.addProperty("updatedCount", updatedCount);
         receipt.addProperty("resultCount", resultCount);
+        receipt.addProperty("errorCount", errorCount);
         return receipt;
     }
 
@@ -1777,9 +1975,18 @@ public class DiagramHandler implements HttpHandler {
         receipt.addProperty("diagramId", diagramId);
         receipt.addProperty("diagramType", diagramType);
         receipt.addProperty("presentationId", presentationId);
-        receipt.addProperty("status", applied ? "applied" : "preview");
-        receipt.addProperty("applied", applied);
-        receipt.addProperty("resetLabels", resetLabels);
+        String status = resultEntry != null && resultEntry.has("status")
+                ? resultEntry.get("status").getAsString()
+                : (applied ? "applied" : "preview");
+        receipt.addProperty("status", status);
+        receipt.addProperty("applied", resultEntry != null && resultEntry.has("applied")
+                ? resultEntry.get("applied").getAsBoolean()
+                : applied);
+        receipt.addProperty("resetLabels", resultEntry != null && resultEntry.has("resetLabels")
+                ? resultEntry.get("resetLabels").getAsBoolean()
+                : resetLabels);
+        receipt.addProperty("updated", resultEntry != null && resultEntry.has("updated")
+                && resultEntry.get("updated").getAsBoolean());
         receipt.addProperty("updateCount", resultEntry != null && resultEntry.has("updates")
                 ? resultEntry.getAsJsonArray("updates").size()
                 : 0);
@@ -1796,12 +2003,51 @@ public class DiagramHandler implements HttpHandler {
             if (entry.has("error")) {
                 continue;
             }
+            if (entry.has("updated") && entry.get("updated").isJsonPrimitive()
+                    && entry.get("updated").getAsBoolean()) {
+                count++;
+                continue;
+            }
             if (entry.has("updates") && entry.get("updates").isJsonArray()
                     && entry.getAsJsonArray("updates").size() > 0) {
                 count++;
             }
         }
         return count;
+    }
+
+    private int countErrorTargets(JsonArray results) {
+        int count = 0;
+        for (JsonElement element : results) {
+            if (!element.isJsonObject()) {
+                continue;
+            }
+            JsonObject entry = element.getAsJsonObject();
+            if (entry.has("error")) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private void appendResults(JsonArray target, JsonArray source) {
+        for (JsonElement element : source) {
+            target.add(element);
+        }
+    }
+
+    private JsonObject buildSelectionError(String presentationId, String message) {
+        JsonObject entry = new JsonObject();
+        entry.addProperty("presentationId", presentationId);
+        entry.addProperty("status", "error");
+        entry.addProperty("applied", false);
+        entry.addProperty("updated", false);
+        entry.addProperty("error", message);
+        return entry;
+    }
+
+    private String safeMessage(Exception e) {
+        return e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
     }
 
     private List<PresentationElement> selectOverlappingPathTargets(
@@ -1865,6 +2111,7 @@ public class DiagramHandler implements HttpHandler {
         json.addProperty("diagramType", defaults.diagramType);
         json.addProperty("normalizedDiagramType", defaults.normalizedDiagramType);
         json.addProperty("resetPathLabelsByDefault", defaults.resetPathLabelsByDefault);
+        json.add("hiddenLabelKeys", toJsonArray(defaults.hiddenLabelKeys));
         json.add("shapeLabelKeys", toJsonArray(defaults.shapeLabelKeys));
         json.add("pathLabelKeys", toJsonArray(defaults.pathLabelKeys));
         json.add("conveyedItemKeys", toJsonArray(defaults.conveyedItemKeys));
@@ -1928,14 +2175,28 @@ public class DiagramHandler implements HttpHandler {
                     "showTaggedValues", "showPorts", "showAttributes");
         }
 
+        List<String> hiddenLabelKeys = mergeCanonicalKeys(shapeLabelKeys, pathLabelKeys);
         return new RepairDefaults(
                 diagramType == null ? "" : diagramType,
                 normalized,
+                hiddenLabelKeys,
                 shapeLabelKeys,
                 pathLabelKeys,
                 conveyedItemKeys,
                 compartmentKeys,
                 resetPathLabelsByDefault);
+    }
+
+    @SafeVarargs
+    private static List<String> mergeCanonicalKeys(List<String>... groups) {
+        LinkedHashSet<String> merged = new LinkedHashSet<>();
+        for (List<String> group : groups) {
+            if (group == null) {
+                continue;
+            }
+            merged.addAll(group);
+        }
+        return List.copyOf(merged);
     }
 
     private static String normalizeDiagramType(String value) {
@@ -2226,6 +2487,7 @@ public class DiagramHandler implements HttpHandler {
     private static final class RepairDefaults {
         private final String diagramType;
         private final String normalizedDiagramType;
+        private final List<String> hiddenLabelKeys;
         private final List<String> shapeLabelKeys;
         private final List<String> pathLabelKeys;
         private final List<String> conveyedItemKeys;
@@ -2235,6 +2497,7 @@ public class DiagramHandler implements HttpHandler {
         private RepairDefaults(
                 String diagramType,
                 String normalizedDiagramType,
+                List<String> hiddenLabelKeys,
                 List<String> shapeLabelKeys,
                 List<String> pathLabelKeys,
                 List<String> conveyedItemKeys,
@@ -2242,11 +2505,26 @@ public class DiagramHandler implements HttpHandler {
                 boolean resetPathLabelsByDefault) {
             this.diagramType = diagramType;
             this.normalizedDiagramType = normalizedDiagramType;
+            this.hiddenLabelKeys = hiddenLabelKeys;
             this.shapeLabelKeys = shapeLabelKeys;
             this.pathLabelKeys = pathLabelKeys;
             this.conveyedItemKeys = conveyedItemKeys;
             this.compartmentKeys = compartmentKeys;
             this.resetPathLabelsByDefault = resetPathLabelsByDefault;
+        }
+    }
+
+    private static final class PresentationSelection {
+        private final List<PresentationElement> targets;
+        private final JsonArray errors;
+
+        private PresentationSelection(List<PresentationElement> targets, JsonArray errors) {
+            this.targets = targets;
+            this.errors = errors;
+        }
+
+        private int totalRequestedCount() {
+            return targets.size() + errors.size();
         }
     }
 }
