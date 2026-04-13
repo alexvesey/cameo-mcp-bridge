@@ -226,7 +226,7 @@ class PackDefinition:
 OOSEM_PACK = PackDefinition(
     id="oosem",
     title="OOSEM Viewpoint Pack",
-    version="2.3.0",
+    version="2.3.1",
     domain="OOSEM",
     required_profiles=("SysML", "UML"),
     required_stereotypes=(

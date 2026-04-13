@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.3.1 - 2026-04-13
+
+Patch release focused on hardening the new diagram-repair surface introduced in `2.3.0`.
+
+### Fixed
+
+- Restored the missing `RepairDefaults.hiddenLabelKeys` field so the plugin compiles cleanly after the `2.3.0` repair-endpoint additions
+- Wrapped `setPresentationElementProperties(...)` and `resetLabelPositions(...)` on the affected repair/property paths so Cameo builds with checked exceptions compile correctly
+- Changed diagram-repair batches to fail soft per target instead of aborting the entire request on the first unsupported presentation element
+- Excluded comment/note presentations from allocation-compartment normalization candidates
+- Improved transition/item-flow presentation receipts to report partial support explicitly when a Cameo build exposes only a subset of the requested properties
+- Corrected `repairLabelPositions` receipts and `updatedCount` reporting for processed targets
+
+### Changed
+
+- Bumped the in-repo Python/plugin/methodology compatibility line to `2.3.1`
+
 ## 2.3.0 - 2026-04-13
 
 Minor release focused on reducing end-to-end human intervention for review, cleanup, and assignment packaging workflows.
