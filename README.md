@@ -2,10 +2,12 @@
 
 An [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that connects AI coding assistants to **CATIA Magic / Cameo Systems Modeler** -- the industry-standard MBSE tool for SysML and UML modeling.
 
-This lets Claude Code (or any MCP-compatible client) **query, create, modify, inspect, validate, and visualize** SysML/UML models inside a running Cameo instance through 162 tools covering capability negotiation, methodology-aware OOSEM workflows, semantic validation, state-machine semantics, elements, relationships, native matrices and tables, Relation Maps, reports, requirements import/export, validation suites, Teamwork/DataHub probes, diagrams, reusable verification, specifications, and guarded macro execution.
+This lets Claude Code, OpenHands, or any MCP-compatible client **query, create, modify, inspect, validate, and visualize** SysML/UML models inside a running Cameo instance through 162 tools covering capability negotiation, methodology-aware OOSEM workflows, semantic validation, state-machine semantics, elements, relationships, native matrices and tables, Relation Maps, reports, requirements import/export, validation suites, Teamwork/DataHub probes, diagrams, reusable verification, specifications, and guarded macro execution.
+
+Supports both **Cameo 2022x** and **2024x**. Version-specific features (Relation Maps, Simulation) are automatically gated at startup — the same MCP toolset works on either installation, gracefully degrading on 2022x.
 
 ```
-Claude Code  <--stdio/MCP-->  Python MCP Server  <--HTTP/REST-->  Java Plugin (Cameo JVM)
+Claude Code / OpenHands  <--stdio/MCP-->  Python MCP Server  <--HTTP/REST-->  Java Plugin (Cameo JVM)
 ```
 
 ## Why This Exists
@@ -73,14 +75,20 @@ All write operations are session-wrapped for undo/redo support. Read operations 
 
 ## Prerequisites
 
-- **CATIA Magic / Cameo Systems Modeler** 2024x or newer (any bundle: Systems of Systems Architect, Cyber Systems Engineer, etc.)
-- **Java 17 JDK** available to Gradle
-- **Python 3.10+** with `pip`
-- **Gradle 8.x** (wrapper included)
+| | 2022x | 2024x |
+|---|---|---|
+| **Cameo** | Systems Modeler 2022x (any bundle) | Systems Modeler 2024x or newer |
+| **Java for Gradle** | JDK 11+ | JDK 17+ |
+| **Python** | 3.10+ | 3.10+ |
+| **Gradle** | 8.x (wrapper included) | 8.x (wrapper included) |
+
+The built plugin JAR is version-specific. Build the JAR that matches your Cameo installation (see below).
 
 ## Installation
 
 ### Quick Install
+
+The installer auto-detects whether you have **OpenHands** or **Claude Code** on your PATH and registers the MCP server accordingly. Pass `CAMEO_VERSION` to select the correct plugin build.
 
 ```bash
 git clone https://github.com/ajhcs/cameo-mcp-bridge.git
@@ -89,78 +97,123 @@ cd cameo-mcp-bridge
 # Set your Cameo install path (default: D:/DevTools/CatiaMagic)
 export CAMEO_HOME="/path/to/your/CatiaMagic"
 
-# Optional: point the installer/Gradle at a Java 17 JDK explicitly
+# ── Cameo 2022x ──────────────────────────────────────────────────────────────
+export CAMEO_VERSION=2022x
+export JDK17_HOME="/path/to/jdk-11"   # JDK 11 is sufficient for 2022x
+
+# ── Cameo 2024x ──────────────────────────────────────────────────────────────
+export CAMEO_VERSION=2024x             # default if omitted
 export JDK17_HOME="/path/to/jdk-17"
 
 ./install.sh
 ```
 
 The install script:
-1. Builds the Java plugin with Gradle and passes `CAMEO_HOME` through automatically
+1. Builds the Java plugin JAR tagged for your Cameo version
 2. Deploys it to `$CAMEO_HOME/plugins/com.claude.cameo.bridge/`
-3. Creates or reuses `mcp-server/.venv/` when not already inside a virtualenv
-4. Installs the Python MCP server into that environment
-5. Registers the MCP server with Claude Code when the `claude` CLI is available
+3. Creates or reuses `mcp-server/.venv/`
+4. Installs the Python MCP server
+5. **If OpenHands is on PATH** — runs `openhands plugin install ./openhands-plugin`
+6. **If Claude Code is on PATH** — runs `claude mcp add cameo-bridge --scope user`
+7. Falls back to printing manual registration commands if neither is found
+
+### Installing for OpenHands
+
+The bridge ships as a ready-to-install OpenHands plugin. You can install it independently of the full `install.sh`:
+
+```bash
+# From the repo root
+openhands plugin install ./openhands-plugin
+```
+
+This registers the MCP server and loads the `cameo-mbse` skill pack, which provides:
+- Session startup sequence (`cameo_probe_bridge` → `cameo_status` → `cameo_get_capabilities` → `cameo_get_project`)
+- Tool quick-reference for all 162 tools
+- OOSEM Phase 2 conformance rules
+- 2022x graceful-degradation patterns (Relation Maps → manual BDD traversal, Simulation → native validation)
+
+Required environment variables for OpenHands:
+
+```bash
+export CAMEO_BRIDGE_PORT=18740      # default; match your Cameo vmoptions
+export CAMEO_BRIDGE_HOST=127.0.0.1  # default
+```
 
 ### Manual Install
 
-**1. Build the Java plugin:**
+**1. Build the Java plugin (choose your version):**
 
 ```bash
 cd plugin
-./gradlew assemblePlugin -PcameoHome="/path/to/CatiaMagic" -Pjdk17Home="/path/to/jdk-17"
+
+# For Cameo 2022x (Java 11 JDK):
+./gradlew assemblePlugin -PcameoVersion=2022x -PcameoHome="/path/to/CatiaMagic"
+
+# For Cameo 2024x (Java 17 JDK):
+./gradlew assemblePlugin -PcameoVersion=2024x -PcameoHome="/path/to/CatiaMagic"
 ```
 
-Gradle must run on a Java 17 JDK. You can also set `JDK17_HOME` or `JAVA17_HOME` instead of passing `-Pjdk17Home=...`.
+You can also set `JDK17_HOME` / `JAVA17_HOME` in the environment instead of relying on the system `JAVA_HOME`. The `2022x` build compiles to Java 11 bytecode; `2024x` compiles to Java 17.
 
 **2. Deploy to Cameo:**
 
-Copy the contents of `plugin/build/plugin-dist/com.claude.cameo.bridge/` to:
 ```
-<CAMEO_HOME>/plugins/com.claude.cameo.bridge/
+plugin/build/libs/cameo-bridge-plugin-<version>.jar
+  → <CAMEO_HOME>/plugins/com.claude.cameo.bridge/
 ```
+
+Copy the full contents of `plugin/build/plugin-dist/com.claude.cameo.bridge/` — not just the JAR — so the `plugin.xml` descriptor goes in too.
 
 **3. Install the Python server:**
 
 ```bash
 cd mcp-server
 python3 -m venv .venv
-. .venv/bin/activate
+. .venv/bin/activate          # Windows: .venv\Scripts\activate
 python -m pip install -e .
 ```
 
-On Windows shells, use `.venv\\Scripts\\activate` instead.
+**4. Register with your agent runtime:**
 
-**4. Register with your MCP client:**
-
-For Claude Code:
+For **Claude Code**:
 ```bash
-claude mcp add cameo-bridge --scope user -- /absolute/path/to/mcp-server/.venv/bin/python -m cameo_mcp.server
+claude mcp add cameo-bridge --scope user -- \
+  /absolute/path/to/mcp-server/.venv/bin/python -m cameo_mcp.server
 ```
 
-On Windows, the interpreter path is typically `.venv\\Scripts\\python.exe`.
+For **OpenHands** (plugin install preferred, but manual works too):
+```bash
+openhands plugin install /absolute/path/to/cameo-mcp-bridge/openhands-plugin
+```
 
-For other MCP clients, configure stdio transport with the venv interpreter and command `-m cameo_mcp.server`.
+For **any other MCP client**, configure stdio transport with the venv interpreter and the command `-m cameo_mcp.server`.
 
-**5. Restart CATIA Magic**, open a project, and verify:
+**5. Restart CATIA Magic**, open a project, then verify:
 
 ```
 > Check cameo status
 ```
 
-If a newly added MCP tool returns HTTP 404 after an update, the Python server
-and Java plugin are out of sync. Rebuild/redeploy the plugin, then restart
-CATIA Magic so the new HTTP handlers are loaded.
+### 2022x-Specific Notes
 
-The Python side now performs a capability handshake against the plugin before
-non-status operations. If `cameo_status` or `cameo_get_capabilities` reports
-`compatibility.clientCompatible = false`, stop and redeploy the matching plugin
-before proceeding.
+When running against Cameo 2022x, the Python server automatically detects the version at first tool call (via `cameo_get_capabilities`) and disables tools in the `relationMaps` and `simulation` groups. You will see those tools listed but calling them returns a structured error:
 
-The Python MCP layer also ships a Phase 2 methodology surface for bounded
-OOSEM workflows. These tools build named artifact recipes, workflow guidance,
-conformance checks, semantic validation, and compact review packets on top of
-the low-level bridge.
+```json
+{
+  "error": "Capability 'relationMaps' is not available in Cameo 2022x",
+  "capability": "relationMaps",
+  "version": "2022x",
+  "alternative": "Use a BDD with cameo_create_diagram and cameo_add_to_diagram to visualize dependencies manually."
+}
+```
+
+All other tools (elements, relationships, matrices, diagrams, validation, reports, requirements import/export, macros, etc.) are fully supported on 2022x.
+
+If a newly added MCP tool returns HTTP 404 after an update, the Python server and Java plugin are out of sync. Rebuild/redeploy the plugin for your Cameo version, then restart CATIA Magic.
+
+The Python side performs a capability handshake before non-status operations. If `cameo_status` or `cameo_get_capabilities` reports `compatibility.clientCompatible = false`, redeploy the matching plugin build before proceeding.
+
+The Python MCP layer also ships a Phase 2 methodology surface for bounded OOSEM workflows. These tools build named artifact recipes, workflow guidance, conformance checks, semantic validation, and compact review packets on top of the low-level bridge.
 
 ## What's New In 2.3.5
 
@@ -176,8 +229,11 @@ the low-level bridge.
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
 | `CAMEO_BRIDGE_PORT` | `18740` | HTTP port for the bridge (must match both sides) |
-| `JDK17_HOME` | unset | Optional Java 17 home used by `install.sh` and Gradle |
-| `JAVA17_HOME` | unset | Alternate Java 17 home override |
+| `CAMEO_BRIDGE_HOST` | `127.0.0.1` | Bridge host (change only for non-local setups) |
+| `CAMEO_BRIDGE_TIMEOUT` | `30.0` | HTTP request timeout in seconds |
+| `CAMEO_VERSION` | `2024x` | Plugin build target: `2022x` or `2024x` — used by `install.sh` to pass `-PcameoVersion=` to Gradle |
+| `JDK17_HOME` | unset | Java home used by `install.sh` and Gradle (`JDK11_HOME` also accepted for 2022x builds) |
+| `JAVA17_HOME` | unset | Alternate Java home override |
 | `CAMEO_MCP_STRUCTURED_RESPONSES` | deprecated | Structured MCP object responses are now always used; this flag is kept only for backward compatibility with older docs |
 
 The Java plugin reads the port from system property `cameo.mcp.port` (default `18740`). To change it, add to your Cameo `*.vmoptions` file:
@@ -539,8 +595,10 @@ The bridge builds models correctly -- elements, relationships, directionality, s
 - **Session recovery edge case** -- if a macro crashes mid-transaction, `cameo_reset_session` may itself throw `TransactionAlreadyCommitedException`; in this case, saving and reopening the project is the most reliable recovery
 
 ### Compatibility
-- Tested with CATIA Magic Systems of Systems Architect 2024x
-- Should work with any Cameo Systems Modeler 2024x bundle (2024x+)
+- Tested with CATIA Magic Systems of Systems Architect 2022x and 2024x
+- Should work with any Cameo Systems Modeler 2022x or 2024x bundle
+- The `2022x` plugin build requires JDK 11+ and targets Java 11 bytecode; the `2024x` build requires JDK 17+ and targets Java 17 bytecode
+- On **2022x**, the `relationMaps` and `simulation` tool groups are automatically disabled; all other tools are supported
 - Requires Groovy script engine (bundled with Cameo) for macro execution
 - The Gradle build requires access to Cameo's `lib/` directory for compile-time dependencies
 
@@ -562,47 +620,68 @@ cameo-mcp-bridge/
   mcp-server/                          # Python MCP server
     cameo_mcp/
       __init__.py
-      client.py                        # HTTP client for the Java plugin
+      client.py                        # HTTP client + version header capture
       server.py                        # MCP tool definitions (162 tools)
+      version_compat.py                # Capability gating (2022x / 2024x)
       verification.py                  # reusable diagram/matrix verification helpers
       methodology/                     # Phase 2 pack registry + recipe runtime
         registry.py
         runtime.py
         service.py
+    tests/
+      test_version_compat.py           # 23 unit tests for capability gating
     pyproject.toml
   plugin/                              # Java Cameo plugin
     src/com/claude/cameo/bridge/
       CameoMCPBridgePlugin.java        # Plugin entry point
       HttpBridgeServer.java            # Embedded HTTP server + routing
+      compat/                          # Version-abstraction layer (NEW)
+        CameoVersion.java              # Enum: V2022X / V2024X
+        VersionDetector.java           # Class-probe detection (no version parsing)
+        NotAvailableInVersionException.java  # 501 error for gated features
+        CompatApiFactory.java          # Factory: returns correct impl set
+        api/                           # Interfaces (DiagramApi, RelationMapApi, …)
+        impl2022x/                     # 2022x implementations + stubs
+        impl2024x/                     # 2024x implementations
       handlers/
-        ProjectHandler.java            # Project info, save
-        ElementQueryHandler.java       # Element search, get, relationships
-        ElementMutationHandler.java    # Create, modify, delete elements
-        RelationshipHandler.java       # Create relationships
-        MatrixHandler.java             # Native matrix artifacts
-        GenericTableHandler.java       # Native Generic Tables
-        DiagramHandler.java            # Full diagram lifecycle
-        RelationMapHandler.java        # Relation Map graph/settings/rendering
-        UiStateHandler.java            # Active diagram and selection state
-        SnapshotHandler.java           # In-memory evidence snapshots
-        ValidationHandler.java         # Native validation suites
-        ReportWizardHandler.java       # Report Wizard templates/generation
-        ImportExportHandler.java       # Requirements import/export
-        CriteriaHandler.java           # Criteria expression helpers
-        TeamworkHandler.java           # Teamwork read-only probes
-        DataHubHandler.java            # DataHub capability/source probes
-        SimulationHandler.java         # Simulation preview/run facade
-        ExtensionProbeHandler.java     # Safety/cyber extension probes
-        ContainmentTreeHandler.java    # Containment tree browsing
-        SpecificationHandler.java      # Specification read/write
-        MacroHandler.java              # Groovy script execution
+        ProjectHandler.java
+        ElementQueryHandler.java
+        ElementMutationHandler.java
+        RelationshipHandler.java
+        MatrixHandler.java
+        GenericTableHandler.java
+        DiagramHandler.java
+        RelationMapHandler.java
+        UiStateHandler.java
+        SnapshotHandler.java
+        ValidationHandler.java
+        ReportWizardHandler.java
+        ImportExportHandler.java
+        CriteriaHandler.java
+        TeamworkHandler.java
+        DataHubHandler.java
+        SimulationHandler.java
+        ExtensionProbeHandler.java
+        ContainmentTreeHandler.java
+        SpecificationHandler.java
+        MacroHandler.java
       util/
-        EdtDispatcher.java             # EDT dispatch with session management
-        ElementSerializer.java         # Element to JSON serialization
-        JsonHelper.java                # JSON parsing utilities
-    plugin.xml                         # Cameo plugin descriptor
-    build.gradle                       # Gradle build config
-  install.sh                           # One-step installer
+        BridgeCapabilities.java        # Emits cameoVersion + available[] list
+        EdtDispatcher.java
+        ElementSerializer.java
+        JsonHelper.java
+    plugin.xml
+    build.gradle                       # Multi-version build (-PcameoVersion=2022x|2024x)
+  openhands-plugin/                    # OpenHands plugin package (NEW)
+    plugin.yaml                        # Plugin manifest
+    mcp-servers/
+      cameo-bridge.yaml                # MCP server definition
+    skills/
+      cameo-mbse/
+        SKILL.md                       # MBSE workflow guidance + 2022x patterns
+  .github/workflows/
+    ci.yml                             # Build matrix: [2022x, 2024x] × [Java, Python]
+  install.sh                           # One-step installer (Claude Code + OpenHands)
   LICENSE
   README.md
 ```
