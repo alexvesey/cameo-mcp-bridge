@@ -1,15 +1,28 @@
 package com.claude.cameo.bridge.util;
 
+import com.claude.cameo.bridge.compat.CameoVersion;
+import com.claude.cameo.bridge.compat.VersionDetector;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 
 import java.util.List;
+import java.util.Set;
 
 /**
  * Stable plugin metadata and machine-readable capability manifest.
  *
- * The Python MCP layer can read this payload to reject version skew before
- * attempting to call into the bridge.
+ * <p>The Python MCP layer reads this payload to:
+ * <ul>
+ *   <li>Reject version skew before attempting write operations.</li>
+ *   <li>Gate tool registration based on the {@code available} list and
+ *       the detected {@code cameoVersion}.</li>
+ * </ul>
+ *
+ * <p>The {@code available} field is a flat list of capability-group keys
+ * whose underlying APIs are confirmed present in the running Cameo instance.
+ * Tools in the Python server declare a {@code required_capability} that must
+ * appear in this list for the full handler to be registered; otherwise a
+ * graceful-degradation stub is used instead.</p>
  */
 public final class BridgeCapabilities {
 
@@ -190,6 +203,17 @@ public final class BridgeCapabilities {
         return versions;
     }
 
+    /**
+     * Capability groups that require 2024x-only APIs.
+     * When the VersionDetector identifies V2022X these groups are
+     * excluded from the {@code available} list in the response, causing
+     * the Python server to register graceful-degradation stubs for those tools.
+     */
+    private static final Set<String> V2024X_ONLY_GROUPS = Set.of(
+            "relationMaps",
+            "simulation"
+    );
+
     private static JsonObject buildMetadata(int port) {
         JsonObject json = new JsonObject();
         json.addProperty("pluginId", PLUGIN_ID);
@@ -212,7 +236,45 @@ public final class BridgeCapabilities {
         json.add("capabilitiesAliases", capabilityAliases);
         json.add("compatibility", buildCompatibility());
         json.add("capabilities", buildCapabilityManifest());
+
+        // ---- 2022x / 2024x version fields --------------------------------
+        // These are consumed by the Python MCP server at startup to gate
+        // which tools are registered with full handlers vs. stubs.
+        CameoVersion cameoVersion = VersionDetector.detect();
+        json.addProperty("cameoVersion", cameoVersion.getLabel());
+        json.add("versionDiagnostics", VersionDetector.buildVersionDiagnostics());
+        json.add("available", buildAvailableList(cameoVersion));
+
         return json;
+    }
+
+    /**
+     * Builds the flat {@code available} array of capability-group keys that
+     * are confirmed reachable on this Cameo installation.
+     *
+     * <p>On V2022X the 2024x-only groups ({@code relationMaps}, {@code simulation})
+     * are excluded; all other groups are always included.</p>
+     */
+    private static JsonArray buildAvailableList(CameoVersion cameoVersion) {
+        JsonArray available = new JsonArray();
+        for (Capability cap : CAPABILITIES) {
+            if (cameoVersion == CameoVersion.V2022X
+                    && V2024X_ONLY_GROUPS.contains(cap.group)) {
+                continue;
+            }
+            // Only add each group key once
+            boolean alreadyAdded = false;
+            for (int i = 0; i < available.size(); i++) {
+                if (available.get(i).getAsString().equals(cap.group)) {
+                    alreadyAdded = true;
+                    break;
+                }
+            }
+            if (!alreadyAdded) {
+                available.add(cap.group);
+            }
+        }
+        return available;
     }
 
     private static JsonObject buildCompatibility() {

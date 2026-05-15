@@ -2,21 +2,43 @@ plugins {
     id 'java'
 }
 
+// ---- version properties ------------------------------------------------
+// Pass -PcameoVersion=2022x to build a 2022x-compatible JAR.
+// Defaults to 2024x (the upstream baseline).
+
+def cameoVersion = project.hasProperty('cameoVersion')
+    ? project.property('cameoVersion')
+    : '2024x'
+
 def cameoHome = project.hasProperty('cameoHome')
     ? project.property('cameoHome')
-    : 'D:/DevTools/CatiaMagic'
+    : (System.getenv('CAMEO_HOME') ?: 'D:/DevTools/CatiaMagic')
 
 def jdk17Home = project.hasProperty('jdk17Home')
     ? project.property('jdk17Home')
     : (System.getenv('JDK17_HOME') ?: System.getenv('JAVA17_HOME'))
 
-sourceCompatibility = '17'
-targetCompatibility = '17'
+println "Building for Cameo ${cameoVersion} — SDK: ${cameoHome}"
+
+// ---- Java compatibility floor ------------------------------------------
+// Shared code (and 2022x compat impls) must compile on Java 11.
+// 2024x-only impl classes may use Java 17 features.
+// We set the floor here; the compiler-args block below sets release=17
+// for the 2024x build and release=11 for 2022x.
+
+sourceCompatibility = cameoVersion == '2022x' ? '11' : '17'
+targetCompatibility = cameoVersion == '2022x' ? '11' : '17'
 
 sourceSets {
     main {
         java {
             srcDirs = ['src/com']
+            // Exclude the compat impl for the version we're NOT building
+            if (cameoVersion == '2022x') {
+                exclude 'claude/cameo/bridge/compat/impl2024x/**'
+            } else {
+                exclude 'claude/cameo/bridge/compat/impl2022x/**'
+            }
         }
     }
     test {
@@ -52,23 +74,33 @@ dependencies {
 
 tasks.withType(JavaCompile).configureEach {
     options.compilerArgs += ['-Xlint:-deprecation', '-Xlint:-unchecked']
-    if (jdk17Home) {
+    if (jdk17Home && cameoVersion != '2022x') {
         options.fork = true
         options.forkOptions.javaHome = file(jdk17Home)
     }
-    options.release = 17
+    // Release floor: 11 for 2022x (Java 11 JVM), 17 for 2024x
+    options.release = cameoVersion == '2022x' ? 11 : 17
 }
 
 tasks.withType(Test).configureEach {
-    if (jdk17Home) {
+    if (jdk17Home && cameoVersion != '2022x') {
         executable = file("${jdk17Home}/bin/java.exe").absolutePath
     }
+    systemProperty 'cameo.target.version', cameoVersion
 }
 
 jar {
-    archiveBaseName = 'cameo-mcp-bridge'
-    archiveVersion = '2.3.5'
+    archiveBaseName    = 'cameo-mcp-bridge'
+    archiveVersion     = '2.3.5'
+    archiveClassifier  = cameoVersion   // e.g. cameo-mcp-bridge-2.3.5-2022x.jar
     destinationDirectory = layout.buildDirectory.dir('libs')
+
+    manifest {
+        attributes(
+            'Cameo-Target-Version': cameoVersion,
+            'Built-By': 'Cameo MCP Bridge fork'
+        )
+    }
 }
 
 tasks.register('assemblePlugin', Copy) {
@@ -76,6 +108,9 @@ tasks.register('assemblePlugin', Copy) {
     from('plugin.xml')
     from(jar.archiveFile)
     into(layout.buildDirectory.dir('plugin-dist/com.claude.cameo.bridge'))
+    doLast {
+        println "Assembled plugin for Cameo ${cameoVersion}: ${jar.archiveFile.get()}"
+    }
 }
 
 tasks.register('deploy', Copy) {

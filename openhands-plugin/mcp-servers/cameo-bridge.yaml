@@ -1,0 +1,25 @@
+name: cameo-bridge
+description: >
+  MCP server for Cameo Systems Modeler / CATIA Magic.
+  Exposes 162 tools for MBSE workflows; automatically gates 2024x-only tools
+  (Relation Maps, Simulation) on 2022x installations.
+
+transport: stdio
+command: python
+args:
+  - "-m"
+  - "cameo_mcp.server"
+
+# Resolved relative to the mcp-server/ directory at install time
+cwd: "../../mcp-server"
+
+env:
+  CAMEO_BRIDGE_PORT:    "${CAMEO_BRIDGE_PORT:-18740}"
+  CAMEO_BRIDGE_HOST:    "${CAMEO_BRIDGE_HOST:-127.0.0.1}"
+  CAMEO_BRIDGE_TIMEOUT: "${CAMEO_BRIDGE_TIMEOUT:-30.0}"
+
+python_requirements:
+  file: "../../mcp-server/pyproject.toml"
+
+# Confirm the bridge is reachable before the agent's first tool call
+startup_tool: cameo_status

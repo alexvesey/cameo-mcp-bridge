@@ -96,19 +96,49 @@ fi
 echo "Python server installed."
 echo ""
 
-# Register with Claude Code
-echo "Registering MCP server with Claude Code..."
-if command -v claude >/dev/null 2>&1; then
+# Register with the detected AI runtime
+echo "Detecting AI runtime..."
+
+if command -v openhands >/dev/null 2>&1; then
+    echo "OpenHands detected — installing as OpenHands plugin..."
+    cd "$SCRIPT_DIR"
+    openhands plugin install ./openhands-plugin
+    echo "OpenHands plugin installed."
+    echo ""
+    echo "=== Installation complete (OpenHands mode) ==="
+    echo ""
+    echo "Next steps:"
+    echo "  1. Restart CATIA Magic / Cameo Systems Modeler"
+    echo "  2. Open a project"
+    echo "  3. In OpenHands, set CAMEO_BRIDGE_PORT=${CAMEO_BRIDGE_PORT:-18740}"
+    echo "  4. Start a new OpenHands session and say: 'Check cameo status'"
+
+elif command -v claude >/dev/null 2>&1; then
+    echo "Claude Code detected — registering MCP server..."
     claude mcp add cameo-bridge --scope user -- "$MCP_PYTHON" -m cameo_mcp.server
+    echo "MCP server registered with Claude Code."
+    echo ""
+    echo "=== Installation complete (Claude Code mode) ==="
+    echo ""
+    echo "Next steps:"
+    echo "  1. Restart CATIA Magic"
+    echo "  2. Open a project"
+    echo "  3. Start a new Claude Code session"
+    echo "  4. Say: 'Check cameo status'"
+
 else
-    echo "Claude CLI not found. Register manually with:"
-    echo "  claude mcp add cameo-bridge --scope user -- \"$MCP_PYTHON\" -m cameo_mcp.server"
+    echo "Neither OpenHands nor Claude Code CLI found — standalone mode."
+    echo ""
+    echo "To register manually:"
+    echo ""
+    echo "  Claude Code:"
+    echo "    claude mcp add cameo-bridge --scope user -- \"$MCP_PYTHON\" -m cameo_mcp.server"
+    echo ""
+    echo "  OpenHands:"
+    echo "    openhands plugin install $SCRIPT_DIR/openhands-plugin"
+    echo ""
+    echo "  Standalone (any MCP client):"
+    echo "    $MCP_PYTHON -m cameo_mcp.server"
+    echo ""
+    echo "=== Installation complete (standalone mode) ==="
 fi
-echo ""
-echo "=== Installation complete ==="
-echo ""
-echo "Next steps:"
-echo "  1. Restart CATIA Magic"
-echo "  2. Open a project"
-echo "  3. Start a new Claude Code session"
-echo "  4. Say: 'Check cameo status'"

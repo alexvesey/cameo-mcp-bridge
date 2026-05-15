@@ -1,0 +1,31 @@
+name: cameo-bridge
+version: "1.0.0"
+description: >
+  Drive Cameo Systems Modeler / CATIA Magic from OpenHands agents.
+  Supports Cameo 2022x and 2024x with automatic graceful degradation for
+  version-specific features (Relation Maps, Simulation REST).
+
+author: Cameo MCP Bridge contributors
+license: MIT
+homepage: https://github.com/your-org/cameo-mcp-bridge
+
+mcp_servers:
+  - mcp-servers/cameo-bridge.yaml
+
+skills:
+  - skills/cameo-mbse
+
+min_openhands_version: "0.14.0"
+
+required_env:
+  - name: CAMEO_BRIDGE_PORT
+    description: Port the Cameo Java bridge plugin listens on
+    default: "18740"
+
+optional_env:
+  - name: CAMEO_BRIDGE_HOST
+    description: Hostname of the machine running Cameo (default 127.0.0.1)
+    default: "127.0.0.1"
+  - name: CAMEO_BRIDGE_TIMEOUT
+    description: HTTP request timeout in seconds
+    default: "30.0"

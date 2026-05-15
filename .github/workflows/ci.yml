@@ -1,0 +1,117 @@
+name: CI — Multi-Version Build & Test
+
+on:
+  push:
+    branches: [main, feat/2022x-compat, feat/openhands-integration, upstream-sync]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ---- Java plugin build ------------------------------------------------
+  build-plugin:
+    name: Build Java Plugin (${{ matrix.cameo_version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        cameo_version: [2022x, 2024x]
+        include:
+          - cameo_version: 2022x
+            java_version: 11
+            cameo_home_subdir: sdk-stubs/2022x
+          - cameo_version: 2024x
+            java_version: 17
+            cameo_home_subdir: sdk-stubs/2024x
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ matrix.java_version }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java_version }}
+
+      - name: Cache Gradle caches
+        uses: actions/cache@v4
+        with:
+          path: ~/.gradle/caches
+          key: gradle-${{ matrix.cameo_version }}-${{ hashFiles('plugin/**/*.gradle') }}
+          restore-keys: gradle-${{ matrix.cameo_version }}-
+
+      - name: Prepare SDK stub directory
+        run: |
+          mkdir -p ${{ matrix.cameo_home_subdir }}/lib
+          mkdir -p ${{ matrix.cameo_home_subdir }}/plugins/com.nomagic.magicdraw.relationshipmap
+          mkdir -p ${{ matrix.cameo_home_subdir }}/plugins/com.nomagic.magicdraw.dependencymatrix
+          mkdir -p ${{ matrix.cameo_home_subdir }}/plugins/com.nomagic.magicdraw.diagramtable
+          # Stub JARs are committed under sdk-stubs/ and replicate the
+          # public API surface of each Cameo version for compile-time resolution.
+          echo "SDK stub dir ready: ${{ matrix.cameo_home_subdir }}"
+
+      - name: Build plugin JAR
+        env:
+          CAMEO_HOME: ${{ github.workspace }}/${{ matrix.cameo_home_subdir }}
+          JDK17_HOME: ${{ matrix.java_version == '17' && env.JAVA_HOME || '' }}
+        run: |
+          cd plugin
+          chmod +x gradlew
+          ./gradlew assemblePlugin \
+            -PcameoVersion=${{ matrix.cameo_version }} \
+            -PcameoHome="${{ github.workspace }}/${{ matrix.cameo_home_subdir }}"
+
+      - name: Upload plugin artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cameo-bridge-plugin-${{ matrix.cameo_version }}
+          path: plugin/build/libs/*.jar
+
+  # ---- Python unit tests ------------------------------------------------
+  test-python:
+    name: Python Tests (${{ matrix.cameo_version }} profile)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        cameo_version: [2022x, 2024x]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: |
+          cd mcp-server
+          pip install -e ".[dev]" 2>/dev/null || pip install -e .
+          pip install pytest pytest-asyncio pytest-cov
+
+      - name: Run unit tests
+        env:
+          CAMEO_VERSION_PROFILE: ${{ matrix.cameo_version }}
+        run: |
+          cd mcp-server
+          pytest tests/ \
+            -v --tb=short \
+            --cov=cameo_mcp \
+            --cov-report=term-missing \
+            -m "not integration"
+
+  # ---- Upstream drift check ---------------------------------------------
+  upstream-sync:
+    name: Check upstream drift
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/ajhcs/cameo-mcp-bridge.git || true
+          git fetch upstream main --depth=20 2>/dev/null \
+            && git log --oneline upstream/main ^HEAD --max-count=5 \
+            || echo "Upstream unavailable or no new commits — skipping drift check"

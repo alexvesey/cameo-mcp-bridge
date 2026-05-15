@@ -265,6 +265,15 @@ _shared_client_base_url: Optional[str] = None
 _capabilities_cache: Optional[dict[str, Any]] = None
 _capabilities_cache_base_url: Optional[str] = None
 
+# Version-negotiation state populated from response headers
+_detected_server_version: Optional[str] = None
+_detected_cameo_version: Optional[str] = None
+
+
+def get_detected_cameo_version() -> Optional[str]:
+    """Return the Cameo version last seen in an X-Cameo-Version response header."""
+    return _detected_cameo_version
+
 
 def _get_client() -> httpx.AsyncClient:
     global _shared_client, _shared_client_base_url
@@ -274,9 +283,30 @@ def _get_client() -> httpx.AsyncClient:
         or _shared_client.is_closed
         or _shared_client_base_url != base_url
     ):
-        _shared_client = httpx.AsyncClient(base_url=base_url, timeout=30.0)
+        # X-Client-Version lets the Java plugin log drift and (in future)
+        # adapt its response format without breaking the protocol.
+        _shared_client = httpx.AsyncClient(
+            base_url=base_url,
+            timeout=30.0,
+            headers={"X-Client-Version": BRIDGE_PLUGIN_VERSION},
+        )
         _shared_client_base_url = base_url
     return _shared_client
+
+
+def _capture_version_headers(response: "httpx.Response") -> None:
+    """Extract and cache version information from plugin response headers."""
+    global _detected_server_version, _detected_cameo_version
+    sv = response.headers.get("X-Server-Version")
+    cv = response.headers.get("X-Cameo-Version")
+    if sv:
+        _detected_server_version = sv
+    if cv and cv != _detected_cameo_version:
+        import logging
+        logging.getLogger(__name__).info(
+            "Detected Cameo version from bridge header: %s", cv
+        )
+        _detected_cameo_version = cv
 
 
 def _annotate_bridge_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
@@ -347,6 +377,7 @@ async def _request_raw(
             json=json_body,
             timeout=timeout,
         )
+        _capture_version_headers(response)
         response.raise_for_status()
         if response.status_code == 204 or not response.content:
             return {"status": "ok"}

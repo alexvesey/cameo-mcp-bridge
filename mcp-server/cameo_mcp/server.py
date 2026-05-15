@@ -12,6 +12,12 @@ from PIL import Image
 from pydantic import AliasChoices, Field
 
 from cameo_mcp import client, verification
+from cameo_mcp import version_compat
+from cameo_mcp.version_compat import (
+    CapabilityNotAvailable,
+    require_relation_maps,
+    require_simulation,
+)
 from cameo_mcp.auto_remediation import (
     build_cross_diagram_remediation_plan,
     detect_cross_diagram_inconsistencies_for_artifacts,
@@ -44,6 +50,38 @@ from cameo_mcp.state_machine_semantics import (
     set_state_behaviors,
     set_transition_trigger,
 )
+
+import asyncio
+import logging as _logging
+
+_startup_logger = _logging.getLogger(__name__)
+_version_compat_initialized = False
+
+
+async def _init_version_compat() -> None:
+    """Lazily fetch the capability manifest and initialise version-compat gating.
+
+    Called from the first relation-map or simulation tool invocation, or
+    proactively via cameo_status.  Idempotent — subsequent calls are no-ops.
+    """
+    global _version_compat_initialized
+    if _version_compat_initialized:
+        return
+    try:
+        caps = await client.get_capabilities()
+        version_compat.init_from_capabilities(caps)
+        _version_compat_initialized = True
+        _startup_logger.info(
+            "version_compat initialised — Cameo %s",
+            version_compat.get_cameo_version() or "unknown",
+        )
+    except Exception as exc:
+        _startup_logger.warning(
+            "version_compat init failed (%s). "
+            "2022x gating will be inactive until the bridge is reachable.",
+            exc,
+        )
+
 
 mcp = FastMCP(
     "CameoMCPBridge",
@@ -1602,23 +1640,40 @@ async def cameo_create_generic_table(
     )
     return _mcp_result(result)
 
-# -- Relation Maps ------------------------------------------------------------
+# -- Relation Maps (2024x only) -----------------------------------------------
+# All handlers in this section call require_relation_maps() first so that
+# on Cameo 2022x a structured, LLM-readable error is returned instead of a
+# connection failure.  _init_version_compat() is awaited to ensure the
+# capabilities have been fetched even if cameo_status was never called.
 
 
 @mcp.tool()
 async def cameo_list_relation_maps() -> dict[str, Any]:
-    """List native Relation Map artifacts in the current project."""
+    """List native Relation Map artifacts in the current project.
+
+    *Requires Cameo 2024x.*  Returns a structured error on 2022x.
+    """
+    await _init_version_compat()
+    try:
+        require_relation_maps()
+    except CapabilityNotAvailable as exc:
+        return exc.to_dict()
     result = await client.list_relation_maps()
     return _mcp_result(result)
 
 
 @mcp.tool()
 async def cameo_get_relation_map(relation_map_id: str) -> dict[str, Any]:
-    """Get one native Relation Map with persisted graph settings.
+    """Get one native Relation Map with persisted graph settings.  *Requires Cameo 2024x.*
 
     Args:
         relation_map_id: ID of the Relation Map diagram element.
     """
+    await _init_version_compat()
+    try:
+        require_relation_maps()
+    except CapabilityNotAvailable as exc:
+        return exc.to_dict()
     result = await client.get_relation_map(relation_map_id)
     return _mcp_result(result)
 
@@ -1674,6 +1729,11 @@ async def cameo_create_relation_map(
         make_element_as_context: Whether the context element is also shown as
             the map context node.
     """
+    await _init_version_compat()
+    try:
+        require_relation_maps()
+    except CapabilityNotAvailable as exc:
+        return exc.to_dict()
     result = await client.create_relation_map(
         parent_id=parent_id,
         name=name,
@@ -1718,6 +1778,11 @@ async def cameo_configure_relation_map(
     make_element_as_context: Optional[bool] = None,
 ) -> dict[str, Any]:
     """Update native graph settings for an existing Relation Map."""
+    await _init_version_compat()
+    try:
+        require_relation_maps()
+    except CapabilityNotAvailable as exc:
+        return exc.to_dict()
     result = await client.configure_relation_map(
         relation_map_id=relation_map_id,
         context_element_id=context_element_id,
@@ -1748,6 +1813,11 @@ async def cameo_refresh_relation_map(relation_map_id: str, timeout: float = 120.
         relation_map_id: ID of the Relation Map diagram element.
         timeout: HTTP and bridge-side timeout in seconds.
     """
+    await _init_version_compat()
+    try:
+        require_relation_maps()
+    except CapabilityNotAvailable as exc:
+        return exc.to_dict()
     result = await client.refresh_relation_map(relation_map_id, timeout=timeout)
     return _mcp_result(result)
 
@@ -1764,6 +1834,11 @@ async def cameo_dump_relation_map_raw_settings(
     result includes sanitized settings plus reflected GraphSettings getters.
     Set include_raw only when class names/string values are needed.
     """
+    await _init_version_compat()
+    try:
+        require_relation_maps()
+    except CapabilityNotAvailable as exc:
+        return exc.to_dict()
     result = await client.get_relation_map_raw_settings(
         relation_map_id=relation_map_id,
         include_raw=include_raw,
@@ -1787,6 +1862,11 @@ async def cameo_list_relation_map_presentations(
     expansion/export failure. Large property dumps are paged and default to
     summaries.
     """
+    await _init_version_compat()
+    try:
+        require_relation_maps()
+    except CapabilityNotAvailable as exc:
+        return exc.to_dict()
     result = await client.get_relation_map_presentations(
         relation_map_id=relation_map_id,
         include_properties=include_properties,
@@ -1805,6 +1885,11 @@ async def cameo_list_relation_map_criteria_templates() -> dict[str, Any]:
     Templates marked verifiedWithUiDiff=false are placeholders until a snapshot
     diff from CATIA Magic's UI confirms the exact native expression.
     """
+    await _init_version_compat()
+    try:
+        require_relation_maps()
+    except CapabilityNotAvailable as exc:
+        return exc.to_dict()
     result = await client.list_relation_map_criteria_templates()
     return _mcp_result(result)
 
@@ -1817,6 +1902,11 @@ async def cameo_set_relation_map_criteria(
     refresh: bool = False,
 ) -> dict[str, Any]:
     """Apply Relation Map criteria using templates or raw UI-derived expressions."""
+    await _init_version_compat()
+    try:
+        require_relation_maps()
+    except CapabilityNotAvailable as exc:
+        return exc.to_dict()
     result = await client.set_relation_map_criteria(
         relation_map_id=relation_map_id,
         mode=mode,
@@ -1837,6 +1927,11 @@ async def cameo_expand_relation_map(
     timeout: float = 120.0,
 ) -> dict[str, Any]:
     """Try to expand native Relation Map nodes and report before/after counts."""
+    await _init_version_compat()
+    try:
+        require_relation_maps()
+    except CapabilityNotAvailable as exc:
+        return exc.to_dict()
     result = await client.expand_relation_map(
         relation_map_id=relation_map_id,
         mode=mode,
@@ -1858,6 +1953,11 @@ async def cameo_collapse_relation_map(
     timeout: float = 120.0,
 ) -> dict[str, Any]:
     """Try to collapse native Relation Map nodes and report before/after counts."""
+    await _init_version_compat()
+    try:
+        require_relation_maps()
+    except CapabilityNotAvailable as exc:
+        return exc.to_dict()
     result = await client.collapse_relation_map(
         relation_map_id=relation_map_id,
         mode=mode,
@@ -1880,6 +1980,11 @@ async def cameo_render_relation_map(
     include_presentation_summary: bool = True,
 ) -> dict[str, Any]:
     """Render/export a Relation Map image; native refresh is opt-in because it can block CATIA."""
+    await _init_version_compat()
+    try:
+        require_relation_maps()
+    except CapabilityNotAvailable as exc:
+        return exc.to_dict()
     result = await client.render_relation_map(
         relation_map_id=relation_map_id,
         refresh=refresh,
@@ -1903,6 +2008,11 @@ async def cameo_verify_relation_map(
     max_depth: int = 3,
 ) -> dict[str, Any]:
     """Verify graph traversal, native settings validity, and rendered count separately."""
+    await _init_version_compat()
+    try:
+        require_relation_maps()
+    except CapabilityNotAvailable as exc:
+        return exc.to_dict()
     result = await client.verify_relation_map(
         relation_map_id=relation_map_id,
         expected_min_nodes=expected_min_nodes,
@@ -1922,6 +2032,11 @@ async def cameo_compare_relation_maps(
     include_raw: bool = False,
 ) -> dict[str, Any]:
     """Compare two Relation Maps, usually a UI-created map and a bridge-created map."""
+    await _init_version_compat()
+    try:
+        require_relation_maps()
+    except CapabilityNotAvailable as exc:
+        return exc.to_dict()
     result = await client.compare_relation_maps(
         left_relation_map_id=left_relation_map_id,
         right_relation_map_id=right_relation_map_id,
@@ -2286,12 +2401,22 @@ async def cameo_import_requirements_preview(
 @mcp.tool()
 async def cameo_get_simulation_capabilities() -> dict[str, Any]:
     """Probe Simulation Toolkit availability."""
+    await _init_version_compat()
+    try:
+        require_simulation()
+    except CapabilityNotAvailable as exc:
+        return exc.to_dict()
     return _mcp_result(await client.get_simulation_capabilities())
 
 
 @mcp.tool()
 async def cameo_list_simulation_configurations() -> dict[str, Any]:
     """List simulation configurations when native readback is promoted."""
+    await _init_version_compat()
+    try:
+        require_simulation()
+    except CapabilityNotAvailable as exc:
+        return exc.to_dict()
     return _mcp_result(await client.list_simulation_configurations())
 
 
@@ -2301,6 +2426,11 @@ async def cameo_run_simulation_preview(
     timeout_ms: int = 30000,
 ) -> dict[str, Any]:
     """Preview a bounded simulation run request."""
+    await _init_version_compat()
+    try:
+        require_simulation()
+    except CapabilityNotAvailable as exc:
+        return exc.to_dict()
     return _mcp_result(await client.run_simulation_preview(
         configuration_id=configuration_id,
         timeout_ms=timeout_ms,
@@ -2316,6 +2446,11 @@ async def cameo_run_simulation(
     async_run: bool = False,
 ) -> dict[str, Any]:
     """Call the guarded simulation run endpoint."""
+    await _init_version_compat()
+    try:
+        require_simulation()
+    except CapabilityNotAvailable as exc:
+        return exc.to_dict()
     return _mcp_result(await client.run_simulation(
         configuration_id=configuration_id,
         target_id=target_id,
@@ -2328,12 +2463,22 @@ async def cameo_run_simulation(
 @mcp.tool()
 async def cameo_get_simulation_result(run_id: str) -> dict[str, Any]:
     """Fetch simulation result status."""
+    await _init_version_compat()
+    try:
+        require_simulation()
+    except CapabilityNotAvailable as exc:
+        return exc.to_dict()
     return _mcp_result(await client.get_simulation_result(run_id))
 
 
 @mcp.tool()
 async def cameo_terminate_simulation(run_id: str) -> dict[str, Any]:
     """Terminate an active simulation job when execution support is enabled."""
+    await _init_version_compat()
+    try:
+        require_simulation()
+    except CapabilityNotAvailable as exc:
+        return exc.to_dict()
     return _mcp_result(await client.terminate_simulation(run_id))
 
 
@@ -2610,6 +2755,11 @@ async def cameo_get_traceability_graph(
         max_depth: Breadth-first traversal depth. Defaults to 3.
         max_nodes: Safety cap on returned nodes. Defaults to 250.
     """
+    await _init_version_compat()
+    try:
+        require_relation_maps()
+    except CapabilityNotAvailable as exc:
+        return exc.to_dict()
     result = await client.get_traceability_graph(
         root_element_ids=root_element_ids,
         context_element_id=context_element_id,
